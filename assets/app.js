@@ -1,0 +1,1398 @@
+const fmt = n => n.toLocaleString('ko-KR');
+const won = n => '₩' + fmt(n);
+const TODAY = new Date('2026-06-13');
+const monthsSince = d => (TODAY - new Date(d)) / (1000*60*60*24*30.4375);
+const daysUntil = d => Math.round((new Date(d) - TODAY)/(1000*60*60*24));
+const ageBucket = d => { const m=monthsSince(d); if(m>=6) return {l:'6개월+ 경과',c:'danger'}; if(m>=3) return {l:'3개월+ 경과',c:'warn'}; if(m>=1) return {l:'1개월+ 경과',c:'ok'}; return {l:'1개월 미만',c:'muted'}; };
+const dispDate = d => d.replace(/-/g,'.').slice(2);
+
+/* ---------------- mock data ---------------- */
+const agenciesByField = {
+  '메디컬':[
+    {id:'a1', name:'한백', region:'인천·경기', grade:'A', sales:48200000, recv:2354500, last:'06/09', next:'06/15', pay:'2025-11-20'},
+    {id:'a2', name:'대성 메디칼', region:'서울', grade:'A+', sales:61500000, recv:12500000, last:'06/05', next:'06/14', pay:'2026-02-15'},
+    {id:'a3', name:'부산 정형', region:'부산·경남', grade:'B', sales:23800000, recv:0, last:'05/28', next:'06/20', pay:'2026-06-01'},
+    {id:'a4', name:'우리 헬스케어', region:'대구', grade:'B', sales:18400000, recv:3120000, last:'06/02', next:'06/18', pay:'2026-05-05'},
+    {id:'a5', name:'중부 의료기', region:'대전·충청', grade:'C', sales:9700000, recv:880000, last:'05/21', next:'06/22', pay:'2025-09-30'},
+  ],
+  '케미컬':[
+    {id:'c1', name:'동양케미칼', region:'경기·인천', grade:'A', sales:38500000, recv:4200000, last:'06/07', next:'06/16', pay:'2026-03-10'},
+    {id:'c2', name:'대한화학상사', region:'서울', grade:'A+', sales:52000000, recv:0, last:'06/03', next:'06/19', pay:'2026-06-02'},
+    {id:'c3', name:'우성케미컬', region:'부산', grade:'B', sales:17600000, recv:1850000, last:'05/26', next:'06/21', pay:'2025-12-15'},
+  ],
+  '하이드로겔':[
+    {id:'h1', name:'젤메드', region:'서울', grade:'A+', sales:29400000, recv:2600000, last:'06/08', next:'06/17', pay:'2026-04-22'},
+    {id:'h2', name:'바이오겔코리아', region:'경기', grade:'A', sales:21300000, recv:0, last:'06/01', next:'06/20', pay:'2026-05-30'},
+    {id:'h3', name:'메디젤', region:'대구', grade:'C', sales:9800000, recv:740000, last:'05/24', next:'06/23', pay:'2025-10-05'},
+  ],
+};
+function curAgencies(){ return agenciesByField[state.domField]||agenciesByField['메디컬']; }
+function findAgency(id){ for(const k in agenciesByField){ const a=agenciesByField[k].find(x=>x.id===id); if(a) return a; } return null; }
+const fieldMeta = { '메디컬':{orders:23,claims:2}, '케미컬':{orders:11,claims:0}, '하이드로겔':{orders:8,claims:1} };
+const alertsByField = {
+  '메디컬':[{tag:'warn',t:'채권채무조회서 발송',s:'6월 말일 기준 · D-7'},{tag:'danger',t:'주문 주기 이탈 — 부산 정형',s:'평균 30일 주기 / 45일째 미주문'},{tag:'warn',t:'계약 갱신 임박 — 대성 메디칼',s:'D-9'}],
+  '케미컬':[{tag:'warn',t:'채권채무조회서 발송',s:'6월 말일 기준 · D-7'},{tag:'danger',t:'주문 주기 이탈 — 우성케미컬',s:'평균 21일 주기 / 38일째 미주문'}],
+  '하이드로겔':[{tag:'warn',t:'채권채무조회서 발송',s:'6월 말일 기준 · D-7'},{tag:'danger',t:'주문 주기 이탈 — 메디젤',s:'평균 28일 주기 / 41일째 미주문'},{tag:'warn',t:'계약 갱신 임박 — 젤메드',s:'D-12'}],
+};
+const pipelineByField = {
+  '메디컬':{'제안':[{n:'한백',amt:12000000},{n:'우리 헬스케어',amt:9500000}],'견적':[{n:'대성 메디칼',amt:32000000}],'협상':[{n:'부산 정형',amt:18000000}],'계약':[{n:'중부 의료기',amt:7200000}],'납품':[{n:'세종 메디텍 (이관)',amt:21000000}]},
+  '케미컬':{'제안':[{n:'동양케미칼',amt:8000000}],'견적':[{n:'대한화학상사',amt:24000000}],'협상':[{n:'우성케미컬',amt:11000000}],'계약':[],'납품':[{n:'한울케미 (이관)',amt:6000000}]},
+  '하이드로겔':{'제안':[{n:'젤메드',amt:7000000}],'견적':[{n:'바이오겔코리아',amt:15000000}],'협상':[],'계약':[{n:'메디젤',amt:5000000}],'납품':[]},
+};
+const fuByField = {
+  '메디컬':[{date:'06/14',agency:'대성 메디칼',type:'계약 갱신',note:'D-9, 갱신 협의 통화',tag:'warn'},{date:'06/15',agency:'한백',type:'미수금',note:'30일 초과 — 채권채무조회 대상',tag:'danger'},{date:'06/18',agency:'우리 헬스케어',type:'재방문',note:'견적 후속',tag:'teal'},{date:'06/20',agency:'부산 정형',type:'정기 접촉',note:'미접촉 21일',tag:'muted'}],
+  '케미컬':[{date:'06/16',agency:'우성케미컬',type:'미수금',note:'채권채무조회 대상',tag:'danger'},{date:'06/19',agency:'대한화학상사',type:'재방문',note:'견적 후속',tag:'teal'}],
+  '하이드로겔':[{date:'06/17',agency:'젤메드',type:'계약 갱신',note:'D-12',tag:'warn'},{date:'06/23',agency:'메디젤',type:'정기 접촉',note:'미접촉 41일',tag:'muted'}],
+};
+function fieldTabs(){ return `<div style="display:flex;gap:6px;margin-bottom:16px">${['메디컬','케미컬','하이드로겔'].map(f=>`<button class="btn" style="${f===state.domField?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setField('${f}')">${f}</button>`).join('')}</div>`; }
+function setField(f){ state.domField=f; state.checked=new Set(); render(); }
+function poUpload(input){ const fs=[...input.files]; if(!fs.length) return; const box=document.getElementById('poFiles'); if(box) box.innerHTML=fs.map(x=>`<span class="badge teal" style="margin:3px 5px 0 0">${x.name}</span>`).join(''); toast(fs.length+'개 PO 파일을 업로드했습니다'); }
+const ledger = { // 출고현황 per agency
+  a1:[
+    {d:'05/03', item:'수액세트 (10cc)', qty:500, price:1200},
+    {d:'05/09', item:'안전주사기 23G',  qty:1000,price:280},
+    {d:'05/16', item:'수액세트 (20cc)', qty:300, price:1500},
+    {d:'05/23', item:'채혈관 EDTA',     qty:2000,price:150},
+    {d:'05/29', item:'멸균거즈 4x4',    qty:800, price:320},
+  ]
+};
+const leads = [
+  {id:'l1', name:'한울 메디칼 유통', region:'부산·경남', type:'일반 후보', channel:'KIMES 전시회', elig:'3/4', score:82, status:'제안'},
+  {id:'l2', name:'동방 헬스',        region:'광주',     type:'독점 후보', channel:'웹 문의',    elig:'4/4', score:90, status:'심사'},
+  {id:'l3', name:'세종 메디텍',      region:'세종',     type:'일반 후보', channel:'AI 리서치',  elig:'2/4', score:61, status:'발굴'},
+  {id:'l4', name:'강원 정형상사',    region:'강원',     type:'일반 후보', channel:'소개',       elig:'3/4', score:74, status:'심사'},
+];
+const recvAccounts = ['외상매출금','외화외상매출금','받을어음','미수수익','선급금','선급비용','단기대여금','장기대여금','보증금'];
+const payAccounts  = ['외상매입금','외화외상매입금','지급어음','미지급금','선수금','선수수익','단기차입금','장기차입금','임대보증금'];
+
+const worldCountries = ['대한민국','일본','중국','대만','홍콩','베트남','태국','싱가포르','말레이시아','인도네시아','필리핀','인도','파키스탄','방글라데시','몽골','카자흐스탄','미얀마','캄보디아','라오스','네팔','스리랑카',
+'사우디아라비아','아랍에미리트','카타르','쿠웨이트','이스라엘','튀르키예','이란','이라크','요르단','레바논','오만','바레인',
+'독일','프랑스','영국','이탈리아','스페인','포르투갈','네덜란드','벨기에','스위스','오스트리아','스웨덴','노르웨이','덴마크','핀란드','폴란드','체코','헝가리','그리스','아일랜드','루마니아','우크라이나','러시아',
+'미국','캐나다','멕시코',
+'브라질','아르헨티나','칠레','콜롬비아','페루','에콰도르','우루과이','파라과이','볼리비아','베네수엘라','코스타리카','파나마','과테말라',
+'남아프리카공화국','이집트','나이지리아','케냐','모로코','알제리','튀니지','가나','에티오피아',
+'호주','뉴질랜드'];
+const koreaRegions = ['서울','부산','대구','인천','광주','대전','울산','세종','경기','강원','충청북도','충청남도','전라북도','전라남도','경상북도','경상남도','제주'];
+const regionMap = {
+  '대한민국': koreaRegions,
+  '일본': ['홋카이도','도호쿠','관동','주부','관서','주고쿠','시코쿠','규슈·오키나와'],
+  '미국': ['동부','중서부','남부','서부'],
+  '독일': ['바이에른','노르트라인','베를린','함부르크'],
+  '중국': ['화북','화동','화남','서부'],
+};
+function regionsOf(c){ return ['전체'].concat(regionMap[c]||[]); }
+const marketPool = {
+  '대한민국':[
+    {name:'서울 메디플러스', region:'서울', size:'중견', lic:true,  items:'캐스트·하이드로겔', fit:88},
+    {name:'인천 정형유통',   region:'인천', size:'중견', lic:true,  items:'캐스트',          fit:81},
+    {name:'수원 메디칼상사', region:'경기', size:'중견', lic:true,  items:'하이드로겔',       fit:79},
+    {name:'경기 헬스라인',   region:'경기', size:'중소', lic:false, items:'재활용품',         fit:64},
+    {name:'대전 메디코',     region:'대전', size:'중견', lic:true,  items:'캐스트',          fit:76},
+    {name:'강원 정형상사',   region:'강원', size:'중소', lic:true,  items:'캐스트',          fit:72},
+    {name:'천안 헬스케어',   region:'충청남도', size:'중견', lic:true, items:'하이드로겔',     fit:78},
+  ],
+  '일본':[
+    {name:'Tokyo Ortho Supply', region:'관동', size:'대기업', lic:true, items:'캐스트·스플린트', fit:90},
+    {name:'Osaka Medix',        region:'관서', size:'중견',   lic:true, items:'캐스트',          fit:77},
+  ],
+  '미국':[
+    {name:'Midwest Ortho Dist.', region:'중서부', size:'중견', lic:true,  items:'캐스트',     fit:82},
+    {name:'West Coast Cast Co.', region:'서부',   size:'중소', lic:false, items:'하이드로겔', fit:68},
+  ],
+  '독일':[
+    {name:'EU Cast Partners', region:'바이에른', size:'중견', lic:true, items:'하이드로겔', fit:75},
+  ],
+};
+function mktList(){ const m=state.market; let l=(marketPool[m.country]||[]).slice();
+  if(m.region && m.region!=='전체') l=l.filter(x=>x.region===m.region);
+  if(m.filters.includes('mid')) l=l.filter(x=>x.size==='중견'||x.size==='대기업');
+  if(m.filters.includes('lic')) l=l.filter(x=>x.lic);
+  if(m.filters.includes('cast')) l=l.filter(x=>/캐스트/.test(x.items));
+  return l; }
+function mktCountry(c){ const m=state.market; m.country=c; m.region='전체'; m.searched=false; m.filters=[]; m.chat=[]; render(); }
+function mktRegion(r){ state.market.region=r; render(); }
+function mktSearch(){ const m=state.market; m.searched=true; if(m.chat.length===0){ m.chat.push({r:'ai',t:`${m.region==='전체'?m.country+' 전체 지역':m.country+' · '+m.region}에서 STP 조건에 맞는 후보를 ${mktList().length}곳 찾았어요. 더 좁히고 싶은 기준을 말씀해 주세요 — 예: 매출 규모, 판매 라이선스 보유, 취급 품목.`}); } render(); setTimeout(()=>{const e=document.getElementById('mktResults'); if(e) e.scrollIntoView({behavior:'smooth',block:'start'});},80); }
+function mktAsk(key,label){ const m=state.market; if(!m.filters.includes(key)) m.filters.push(key); m.chat.push({r:'me',t:label}); m.chat.push({r:'ai',t:`${label} 조건을 반영했어요. 현재 후보 ${mktList().length}곳입니다.`}); render(); }
+function mktReset(){ const m=state.market; m.filters=[]; m.chat=m.chat.slice(0,1); m.chat.push({r:'ai',t:`조건을 초기화했어요. 현재 후보 ${mktList().length}곳입니다.`}); render(); }
+function mktSend(){ const inp=document.getElementById('mktInput'); const v=(inp&&inp.value||'').trim(); if(!v) return; const m=state.market; m.chat.push({r:'me',t:v}); const ap=[];
+  if(/중견|규모|대기업|큰|매출/.test(v)&&!m.filters.includes('mid')){m.filters.push('mid');ap.push('중견 이상');}
+  if(/라이선스|면허|허가|판매업/.test(v)&&!m.filters.includes('lic')){m.filters.push('lic');ap.push('판매 라이선스 보유');}
+  if(/캐스트|casting/i.test(v)&&!m.filters.includes('cast')){m.filters.push('cast');ap.push('캐스트 취급');}
+  m.chat.push({r:'ai',t: ap.length?`${ap.join(', ')} 조건을 반영했어요. 현재 후보 ${mktList().length}곳입니다.`:`현재 후보 ${mktList().length}곳입니다. 매출 규모·판매 라이선스·취급 품목으로 더 좁힐 수 있어요.`}); render(); }
+
+/* ---------------- state ---------------- */
+let state = { view:'dom-dash', domField:'메디컬', ovField:'메디컬', fxRange:'1M', shipCase:'fob-customer', shipAgency:'o1', ovSelPO:0, ovPreview:null, plMode:'기존', agency:null, aTab:'개요', lead:null, checked:new Set(), docAgency:null, shipTab:'메디컬', ledgerChk:new Set(), narrowed:false,
+  market:{ country:'대한민국', region:'전체', searched:false, filters:[], chat:[] },
+  suga:{ brand:'NEAL', grade:'A', premold:true, cover:true } };
+
+/* ---------------- helpers ---------------- */
+const gradeBadge = g => { const c={'A+':'teal','A':'info','B':'warn','C':'muted'}[g]||'muted'; return `<span class="badge ${c}">${g}</span>`; };
+function setHead(t,c){ document.getElementById('ttl').textContent=t; document.getElementById('crumb').textContent=c; }
+function toast(msg){ const t=document.getElementById('toast'); t.innerHTML='<svg width="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>'+msg; t.classList.add('show'); clearTimeout(window._tt); window._tt=setTimeout(()=>t.classList.remove('show'),2600); }
+function openModal(html){ document.getElementById('modal').innerHTML=html; document.getElementById('modalBg').classList.add('show'); }
+function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
+
+/* ---------------- views ---------------- */
+const sugaGrades=['A+','A','B','C']; const sugaGi={'A+':0,'A':1,'B':2,'C':3};
+const sugaRate={'A+':'23%','A':'25%','B':'27%','C':'30%'};
+// 단가(견적가)는 NEAL·SMILE 동일. p=[A+,A,B,C]. sN/sS = 2026-04-27 보험수가(브랜드별)
+const sugaCommon=[
+  {n:'Cast', spec:'2"',         p:[1200,1300,1400,1500],      sN:5250,  sS:5250},
+  {n:'Cast', spec:'3"',         p:[1700,1800,2000,2200],      sN:7590,  sS:7590},
+  {n:'Cast', spec:'4"',         p:[1900,2100,2200,2500],      sN:8620,  sS:8620},
+  {n:'Cast', spec:'5"',         p:[2000,2100,2300,2600],      sN:8840,  sS:8840},
+  {n:'Splint (Roll)', spec:'2" × 4.5m', p:[27800,30200,32700,36300], sN:128050, sS:128050},
+  {n:'Splint (Roll)', spec:'3" × 4.5m', p:[33700,36700,39600,44000], sN:155300, sS:155300},
+  {n:'Splint (Roll)', spec:'4" × 4.5m', p:[35500,38600,41700,46300], sN:163320, sS:163320},
+  {n:'Splint (Roll)', spec:'5" × 4.5m', p:[38700,42100,45400,50500], sN:178340, sS:178340},
+  {n:'Splint (Roll)', spec:'6" × 4.5m', p:[49800,54100,58400,64900], sN:229180, sS:229180},
+  {n:'Splint (Pre-Cut)', spec:'2" × 12"', p:[3400,3700,4000,4400],   sN:15330, sS:15580},
+  {n:'Splint (Pre-Cut)', spec:'3" × 14"', p:[3800,4100,4400,4900],   sN:17070, sS:17070},
+  {n:'Splint (Pre-Cut)', spec:'3" × 40"', p:[6000,6500,7000,7800],   sN:27300, sS:27300},
+  {n:'Splint (Pre-Cut)', spec:'4" × 18"', p:[4500,4900,5200,5800],   sN:20360, sS:20360},
+  {n:'Splint (Pre-Cut)', spec:'4" × 34"', p:[6000,6500,7000,7800],   sN:27300, sS:27300},
+  {n:'Splint (Pre-Cut)', spec:'5" × 34"', p:[7100,7800,8400,9300],   sN:32680, sS:32680},
+  {n:'Splint (Pre-Cut)', spec:'5" × 50"', p:[10700,11600,12600,14000], sN:49130, sS:49130},
+  {n:'Splint (Pre-Cut)', spec:'6" × 34"', p:[7100,7800,8400,9300],   sN:32680, sS:32680},
+  {n:'Splint (Pre-Cut)', spec:'6" × 50"', p:[13100,14300,15400,17100], sN:60300, sS:60300},
+];
+const premoldLine=[
+  {n:'NPSA-S (Premold)', price:10800, suga:31330},
+  {n:'NPSA-M (Premold)', price:10800, suga:31330},
+  {n:'NPSA-L (Premold)', price:10800, suga:31330},
+  {n:'NPLA-S (Premold)', price:17180, suga:49870},
+  {n:'NPLA-M (Premold)', price:17180, suga:49870},
+  {n:'NPLA-L (Premold)', price:17180, suga:49870},
+  {n:'NPSL-S (Premold)', price:17180, suga:47390},
+  {n:'NPSL-M (Premold)', price:17180, suga:47390},
+  {n:'NPSL-L (Premold)', price:17180, suga:47390},
+  {n:'NPLL-S (Premold)', price:21880, suga:60350},
+  {n:'NPLL-M (Premold)', price:21880, suga:60350},
+  {n:'NPLL-L (Premold)', price:21880, suga:60350},
+];
+const coverLine=[
+  {n:'NCB-2010', price:3000},{n:'NCB-3008', price:3000},{n:'NCB-3012', price:3800},{n:'NCB-4008', price:3600},
+  {n:'NCB-4014', price:4400},{n:'NCB-4018', price:5100},{n:'NCB-5012', price:4500},{n:'NCB-5018', price:5400},
+];
+function sugaSet(f,v){ const y=window.scrollY; state.suga[f]=v; render(); window.scrollTo(0,y); }
+function sugaToggle(k){ const y=window.scrollY; state.suga[k]=!state.suga[k]; render(); window.scrollTo(0,y); }
+function sugaTableHTML(){
+  const st=state.suga, idx=sugaGi[st.grade];
+  const basic = sugaCommon.map(x=>`<tr><td></td><td>${st.brand} ${x.n} <span class="muted">${x.spec}</span></td><td class="num">${won(x.p[idx])}</td><td class="num">${won(st.brand==='NEAL'?x.sN:x.sS)}</td></tr>`).join('');
+  let groups = `<tr class="grouphdr"><td></td><td colspan="3"><b>기본 (캐스트 · 스플린트)</b> <span class="badge ok">항상 포함</span></td></tr>${basic}`;
+  if(st.brand==='NEAL'){
+    const pm = premoldLine.map(x=>`<tr><td></td><td>NEAL ${x.n}</td><td class="num">${won(x.price)}</td><td class="num">${x.suga!=null?won(x.suga):'<span class="muted">–</span>'}</td></tr>`).join('');
+    const cv = coverLine.map(x=>`<tr><td></td><td>NEAL ${x.n}</td><td class="num">${won(x.price)}</td><td class="num"><span class="muted">비급여</span></td></tr>`).join('');
+    groups += `<tr class="grouphdr"><td style="text-align:center"><input type="checkbox" class="chk" ${st.premold?'checked':''} onclick="sugaToggle('premold')"></td><td colspan="3"><b>닐 프리몰드 라인</b> <span class="muted">견적서 선택 포함 · 단가 고정</span></td></tr>${pm}`;
+    groups += `<tr class="grouphdr"><td style="text-align:center"><input type="checkbox" class="chk" ${st.cover?'checked':''} onclick="sugaToggle('cover')"></td><td colspan="3"><b>닐커버 라인 (NCB)</b> <span class="muted">견적서 선택 포함 · 단가 고정 · 비급여</span></td></tr>${cv}`;
+  }
+  return `<div class="card">
+    <div style="display:flex;align-items:center;border-bottom:1px solid var(--border)">
+      <div class="tabs" style="flex:1;border-bottom:none">${['NEAL','SMILE'].map(b=>`<button class="${b===st.brand?'active':''}" onclick="sugaSet('brand','${b}')">${b}</button>`).join('')}</div>
+      <button class="btn primary sm" style="margin:0 12px" data-view="quote">견적서 발송</button>
+    </div>
+    <div class="pad">
+      <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:13px">
+        <span class="muted" style="font-size:12px;margin-right:2px">등급</span>
+        ${sugaGrades.map(g=>`<button class="btn sm" style="${g===st.grade?'background:var(--teal);border-color:var(--teal);color:#fff':''}" onclick="sugaSet('grade','${g}')">${g}</button>`).join('')}
+        <span class="muted" style="font-size:12px;margin-left:6px">단가 적용률 ${sugaRate[st.grade]} · 좌측 체크로 견적서 포함</span>
+      </div>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+        <thead><tr><th style="width:34px"></th><th>품목</th><th class="num">단가 (${st.grade})</th><th class="num">보험수가</th></tr></thead>
+        <tbody>${groups}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
+function vDomDash(){
+  setHead('대시보드','국내영업 · '+state.domField);
+  const ags=curAgencies();
+  const totalRecv=ags.reduce((s,a)=>s+a.recv,0);
+  const totalSales=ags.reduce((s,a)=>s+a.sales,0);
+  const recvCount=ags.filter(a=>a.recv>0).length;
+  const meta=fieldMeta[state.domField];
+  const recvList=ags.filter(a=>a.recv>0).sort((x,y)=>new Date(x.pay)-new Date(y.pay));
+  const alerts=alertsByField[state.domField];
+  return `
+  ${fieldTabs()}
+  <div class="kpis" style="margin-bottom:20px">
+    <div class="kpi"><div class="lab">당월 매출</div><div class="val">${won(totalSales)}</div><div class="sub">${state.domField} 분야</div></div>
+    <div class="kpi"><div class="lab">미수금 총액</div><div class="val warn">${won(totalRecv)}</div><div class="sub">${ags.length}개 거래처 중 ${recvCount}곳</div></div>
+    <div class="kpi"><div class="lab">진행 주문</div><div class="val">${meta.orders}건</div></div>
+    <div class="kpi"><div class="lab">미처리 클레임</div><div class="val ${meta.claims?'danger':''}">${meta.claims}건</div></div>
+  </div>
+  <div class="row">
+    <div class="card" style="flex:1.3;min-width:320px"><div class="pad">
+      <div class="seclabel">미수금 현황</div>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+        <thead><tr><th>업체</th><th class="num">미수금</th><th>마지막 입금일</th><th>경과</th></tr></thead>
+        <tbody>${recvList.length?recvList.map(a=>{const b=ageBucket(a.pay); return `<tr class="clickable" data-agency="${a.id}"><td><b>${a.name}</b></td><td class="num" style="color:var(--warn);font-weight:600">${won(a.recv)}</td><td class="muted">${dispDate(a.pay)}</td><td><span class="badge ${b.c}">${b.l}</span></td></tr>`;}).join(''):'<tr><td colspan="4" class="muted" style="padding:14px;text-align:center">미수금 없음</td></tr>'}</tbody>
+      </table></div>
+      <div class="muted" style="font-size:12px;margin-top:8px">행을 클릭하면 업체 정보(대리점 상세)로 이동합니다.</div>
+    </div></div>
+    <div class="card" style="flex:1;min-width:260px"><div class="pad">
+      <div class="seclabel">알림</div>
+      <div class="ledger-list">
+        ${alerts.map(x=>`<div class="li"><span class="dotmark" style="background:var(--${x.tag})"></span><div class="ti"><div style="font-size:13px;font-weight:600">${x.t}</div><div class="muted" style="font-size:12px">${x.s}</div></div></div>`).join('')}
+      </div>
+    </div></div>
+  </div>
+  ${state.domField==='메디컬'?`<div class="seclabel" style="margin-top:22px">보험수가표 <span class="muted" style="font-weight:400">· 2026-04-27 고시 기준 (보험수가 고정 · 단가는 등급별)</span></div>${sugaTableHTML()}`:''}`;
+}
+
+function vAgencies(){
+  setHead('대리점 관리','국내영업 · '+state.domField);
+  const ags=curAgencies();
+  const anyChecked = state.checked.size>0;
+  const stages=['제안','견적','협상','계약','납품'];
+  const pipeline=pipelineByField[state.domField];
+  const fu=fuByField[state.domField];
+  return `
+  ${fieldTabs()}
+  <div class="pagehead"><div><div class="t">대리점 관리</div><div class="d">${state.domField} · 영업 파이프라인 · Follow-up · 대리점 리스트를 한 화면에서 봅니다.</div></div></div>
+
+  <div class="seclabel">영업 파이프라인 (단계별)</div>
+  <div class="row" style="overflow:auto;flex-wrap:nowrap;gap:10px;margin-bottom:6px">
+    ${stages.map(s=>{const deals=pipeline[s]||[];const sum=deals.reduce((a,d)=>a+d.amt,0);
+      return `<div style="flex:1;min-width:148px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 11px;background:var(--surface-2);border:1px solid var(--border);border-bottom:none;border-radius:8px 8px 0 0"><b style="font-size:13px">${s}</b><span class="badge muted">${deals.length}</span></div>
+        <div style="border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;padding:8px;background:var(--surface);min-height:96px">
+          ${deals.map(d=>`<div style="border:1px solid var(--border);border-radius:7px;padding:9px 10px;margin-bottom:7px;background:#fff"><b style="font-size:12.5px">${d.n}</b><div class="muted" style="font-size:11.5px;margin-top:2px">${won(d.amt)}</div></div>`).join('')||'<div class="muted" style="font-size:12px;padding:6px">-</div>'}
+          <div style="font-size:11px;color:var(--ink-3);text-align:right">소계 ${won(sum)}</div>
+        </div>
+      </div>`;}).join('')}
+  </div>
+  <div class="muted" style="font-size:12px;margin-bottom:6px">발굴 센터에서 이관된 기회가 자동으로 단계에 표시됩니다.</div>
+
+  <div class="seclabel" style="margin-top:22px">Follow-up 대시보드</div>
+  <div class="card ov"><table>
+    <thead><tr><th>예정일</th><th>거래처</th><th>유형</th><th>내용</th><th></th></tr></thead>
+    <tbody>${fu.map(f=>`<tr><td><b>${f.date}</b></td><td>${f.agency}</td><td><span class="badge ${f.tag}">${f.type}</span></td><td class="muted">${f.note}</td><td class="num"><button class="btn sm" onclick="toast('완료 처리했습니다')">완료</button></td></tr>`).join('')}</tbody>
+  </table></div>
+
+  <div class="pagehead" style="margin:22px 0 10px"><div style="font-weight:700">대리점 리스트</div>
+    <div class="quick">
+      <button class="btn" id="exportBtn">엑셀 내보내기</button>
+      <button class="btn" data-view="dom-ledger">채권채무조회서 발송 →</button>
+    </div>
+  </div>
+  <div class="card ov"><table>
+    <thead><tr>
+      <th>대리점</th><th>지역</th><th>단가 등급</th>
+      <th class="num">당월 매출</th><th class="num">미수금</th><th>최근 접촉</th>
+    </tr></thead>
+    <tbody>
+      ${ags.map(a=>`<tr class="clickable" data-agency="${a.id}">
+        <td><b>${a.name}</b></td><td>${a.region}</td><td>${gradeBadge(a.grade)}</td>
+        <td class="num">${won(a.sales)}</td>
+        <td class="num ${a.recv>0?'':'muted'}" style="${a.recv>0?'color:var(--warn);font-weight:600':''}">${a.recv>0?won(a.recv):'-'}</td>
+        <td class="muted">${a.last}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table></div>
+  <div class="muted" style="font-size:12px;margin-top:10px">행을 클릭하면 대리점 상세로 이동합니다. 채권채무조회서 발송은 ‘출고현황 · 원장 발송’ 메뉴로 이동했습니다.</div>`;
+}
+
+function vAgencyDetail(){
+  const a = findAgency(state.agency);
+  setHead(a.name,'국내영업 · 대리점 상세');
+  const tabs = ['개요','거래처원장','매출·주문','클레임·품질','계약','문서함','활동'];
+  let body='';
+  if(state.aTab==='개요'){
+    body = `
+    <div class="kpis" style="margin:18px 0">
+      <div class="kpi"><div class="lab">당월 매출</div><div class="val">${won(a.sales)}</div></div>
+      <div class="kpi"><div class="lab">미수금</div><div class="val ${a.recv>0?'warn':''}">${a.recv>0?won(a.recv):'-'}</div></div>
+      <div class="kpi"><div class="lab">진행 주문</div><div class="val">7건</div></div>
+      <div class="kpi"><div class="lab">미처리 클레임</div><div class="val ${a.name==='한백'?'danger':''}">${a.name==='한백'?'2건':'0건'}</div></div>
+    </div>
+    <div class="seclabel">빠른 작업</div>
+    <div class="quick" style="margin-bottom:20px">
+      <button class="btn" data-doc="${a.id}">채권채무조회서</button>
+      <button class="btn" onclick="toast('견적서 작성 화면 (프로토타입)')">견적서 작성</button>
+      <button class="btn" onclick="toast('Follow-up 등록 (프로토타입)')">Follow-up 등록</button>
+    </div>
+    <div class="seclabel">최근 활동</div>
+    <div class="card"><div class="pad ledger-list">
+      ${[['견적서 v2 발송 — 수액세트 외 3종','06/09'],['통화 — 6월 정기 발주 협의','06/05'],['클레임 접수 — 포장 불량 2건, 처리중','06/02']].map(x=>`<div class="li"><div class="ti">${x[0]}</div><span class="muted" style="font-size:12px">${x[1]}</span></div>`).join('')}
+    </div></div>`;
+  } else if(state.aTab==='거래처원장'){
+    const rows = ledger[a.id] || ledger.a1;
+    const sum = rows.reduce((s,r)=>s+r.qty*r.price,0);
+    const qsum = rows.reduce((s,r)=>s+r.qty,0);
+    const carry=1250000, paid=2000000;
+    body = `
+    <div class="pagehead" style="margin:18px 0 14px">
+      <div><div style="font-weight:700">거래처원장 · 출고현황</div><div class="d">조회 기간 2026.05.01 ~ 05.31</div></div>
+      <div class="quick">
+        <button class="btn sm" onclick="toast('PDF로 이메일 발송 (프로토타입)')">이메일 전송</button>
+        <button class="btn sm" onclick="toast('PDF로 팩스 발송 (프로토타입)')">팩스 전송</button>
+      </div>
+    </div>
+    <div class="kpis" style="margin-bottom:16px">
+      <div class="kpi"><div class="lab">이월 잔액</div><div class="val" style="font-size:20px">${won(carry)}</div></div>
+      <div class="kpi"><div class="lab">당기 출고액</div><div class="val" style="font-size:20px">${won(sum)}</div></div>
+      <div class="kpi"><div class="lab">당기 입금액</div><div class="val" style="font-size:20px">${won(paid)}</div></div>
+      <div class="kpi"><div class="lab">미수 잔액</div><div class="val warn" style="font-size:20px">${won(carry+sum-paid)}</div></div>
+    </div>
+    <div class="card ov"><table>
+      <thead><tr><th>출고일</th><th>주문품목</th><th class="num">수량</th><th class="num">단가</th><th class="num">총액</th></tr></thead>
+      <tbody>
+        ${rows.map(r=>`<tr><td>${r.d}</td><td>${r.item}</td><td class="num">${fmt(r.qty)}</td><td class="num">${won(r.price)}</td><td class="num">${won(r.qty*r.price)}</td></tr>`).join('')}
+        <tr class="total" style="font-weight:700;background:var(--surface-2)"><td colspan="2">합계</td><td class="num">${fmt(qsum)}</td><td></td><td class="num">${won(sum)}</td></tr>
+      </tbody>
+    </table></div>`;
+  } else if(state.aTab==='매출·주문'){
+    const orders=[['06/09','수액세트 10cc','500','₩600,000','납품완료'],['06/05','안전주사기 23G','1,000','₩280,000','배송중'],['05/29','멸균거즈 4x4','800','₩256,000','납품완료']];
+    body=`<div style="margin-top:18px" class="card ov"><table><thead><tr><th>주문일</th><th>품목</th><th class="num">수량</th><th class="num">금액</th><th>상태</th></tr></thead><tbody>${orders.map(o=>`<tr><td>${o[0]}</td><td>${o[1]}</td><td class="num">${o[2]}</td><td class="num">${o[3]}</td><td><span class="badge ${o[4]==='납품완료'?'ok':'info'}">${o[4]}</span></td></tr>`).join('')}</tbody></table></div><div class="quick" style="margin-top:14px"><button class="btn" data-doc="${a.id}">채권채무조회서</button><button class="btn" onclick="toast('견적서 작성 (프로토타입)')">견적서 작성</button></div>`;
+  } else if(state.aTab==='클레임·품질'){
+    const claims = a.name==='한백' ? [['06/02','포장 불량 2건','진행중','warn']] : [];
+    const ag = returnsData.filter(r=>r.agency===a.name);
+    body=`<div style="margin-top:18px"><div class="seclabel">클레임</div>${claims.length?`<div class="card ov"><table><thead><tr><th>접수일</th><th>내용</th><th>상태</th></tr></thead><tbody>${claims.map(c=>`<tr><td>${c[0]}</td><td>${c[1]}</td><td><span class="badge ${c[3]}">${c[2]}</span></td></tr>`).join('')}</tbody></table></div>`:`<div class="card"><div class="pad muted">등록된 클레임이 없습니다.</div></div>`}
+    <div class="seclabel" style="margin-top:16px">반품·교환 / 불량 피드백처리요청서 <span class="muted" style="font-weight:400">· ‘반품·교환 내역’에서 기안된 건 반영(읽기 전용)</span></div>
+    ${ag.length?`<div class="card ov"><table><thead><tr><th>일자</th><th>구분</th><th>제품</th><th class="num">수량</th><th>사유</th><th>LOT</th><th>피드백처리요청서</th></tr></thead><tbody>${ag.map(r=>`<tr><td>${r.date}</td><td>${r.type}</td><td>${r.prod}</td><td class="num">${r.qty}</td><td>${r.reason}</td><td>${r.lot||'—'}</td><td>${r.defect?(r.fb?'<span class="badge ok">기안됨</span>':'<span class="badge warn">미기안</span>'):'<span class="muted">해당없음</span>'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="card"><div class="pad muted">반품·교환 내역이 없습니다.</div></div>`}
+    <div class="muted" style="font-size:12px;margin-top:8px">※ 피드백처리요청서 입력은 ‘반품·교환 내역’ 메뉴에서만 가능합니다(여기서는 입력 불가).</div></div>`;
+  } else if(state.aTab==='계약'){
+    body=`<div style="margin-top:18px"><div class="seclabel">계약</div><div class="card ov"><table><thead><tr><th>계약명</th><th>기간</th><th>상태</th></tr></thead><tbody><tr><td>연간 공급 계약 2026</td><td>2026.01 ~ 2026.12</td><td><span class="badge ok">유효</span></td></tr></tbody></table></div><div class="seclabel" style="margin-top:16px">보험수가표 배포 이력</div><div class="card"><div class="pad" style="font-size:13px">2026.01 배포 · v2</div></div><div class="quick" style="margin-top:14px"><button class="btn" onclick="toast('계약서 관리 (프로토타입)')">계약서</button><button class="btn" onclick="toast('보험수가표 배포 (프로토타입)')">보험수가표</button></div></div>`;
+  } else if(state.aTab==='문서함'){
+    const docs=[['ISO 13485 인증서','인증 허브','2027.03 만료'],['제품 카탈로그 2026','카탈로그','—'],['보험수가표 v2','보험','2026.01']];
+    body=`<div style="margin-top:18px"><div class="seclabel">거래처 공유 문서 (인증 허브 연동)</div><div class="card"><div class="pad ledger-list">${docs.map(d=>`<div class="li"><div class="ti"><b style="font-weight:600">${d[0]}</b> <span class="muted" style="font-size:12px">· ${d[1]}</span></div><span class="muted" style="font-size:12px">${d[2]}</span></div>`).join('')}</div></div></div>`;
+  } else {
+    body=`<div style="margin-top:18px"><div class="seclabel">활동 로그</div><div class="card"><div class="pad ledger-list">${[['방문','정기 미팅 — 6월 발주','06/09'],['통화','납기 협의','06/05'],['메일','견적서 v2 발송','06/03']].map(x=>`<div class="li"><span class="badge muted">${x[0]}</span><div class="ti">${x[1]}</div><span class="muted" style="font-size:12px">${x[2]}</span></div>`).join('')}</div></div></div>`;
+  }
+  return `
+    <div class="back" data-view="dom-agencies">← 대리점 관리</div>
+    <div class="actor" style="margin-bottom:6px">
+      <div class="av">${a.name.slice(0,2)}</div>
+      <div><div style="font-size:18px;font-weight:700">${a.name}</div>
+      <div class="muted" style="font-size:13px">${a.region} · 단가 등급 ${a.grade}</div></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="tabs" id="aTabs">${tabs.map(t=>`<button class="${t===state.aTab?'active':''}" data-tab="${t}">${t}</button>`).join('')}</div>
+      <div class="pad" style="padding-top:4px">${body}</div>
+    </div>`;
+}
+
+function vPipeline(){
+  setHead('영업 파이프라인','국내영업');
+  const cols={'제안':['한백','우리 헬스케어'],'견적':['대성 메디칼'],'협상':['부산 정형'],'계약':['중부 의료기'],'납품':['세종 메디텍 (이관)']};
+  return `<div class="pagehead"><div><div class="t">영업 파이프라인</div><div class="d">발굴 센터에서 이관된 기회가 자동으로 표시됩니다.</div></div></div>
+  <div class="row" style="overflow:auto">
+    ${Object.entries(cols).map(([k,v])=>`<div style="flex:1;min-width:170px">
+      <div class="seclabel">${k} · ${v.length}</div>
+      ${v.map(n=>`<div class="card pad" style="margin-bottom:10px;padding:13px"><b style="font-size:13.5px">${n}</b><div class="muted" style="font-size:12px;margin-top:4px">예상 ${won(([12,32,18,40,9][Math.floor(Math.random()*5)])*1000000)}</div></div>`).join('')}
+    </div>`).join('')}
+  </div>`;
+}
+
+function vDiscDash(){
+  setHead('발굴 동선 · 대시보드','고객 발굴 센터');
+  const steps=[['01','시장분석 · STP','국가·지역·조건 입력'],['02','탐색 + AI 비서','대화로 후보 좁히기'],['03','잠재 거래처 리스트','리드 등록·관리'],['04','리드 상세','검증 후 영업 이관']];
+  return `
+  <div class="pagehead"><div><div class="t">고객 발굴 센터</div><div class="d">잠재 거래처를 검증해 국내영업으로 이관하는 동선입니다.</div></div></div>
+  <div class="flow" style="margin-bottom:24px">
+    ${steps.map(s=>`<div class="step"><div class="n">${s[0]}</div><div class="h">${s[1]}</div><div class="s">${s[2]}</div></div>`).join('')}
+  </div>
+  <div class="kpis" style="margin-bottom:20px">
+    <div class="kpi"><div class="lab">신규 리드</div><div class="val">12</div></div>
+    <div class="kpi"><div class="lab">심사 대기</div><div class="val warn">5</div></div>
+    <div class="kpi"><div class="lab">제안 발송</div><div class="val">8</div></div>
+    <div class="kpi"><div class="lab">전환율</div><div class="val ok">34%</div></div>
+  </div>
+  <div class="pagehead" style="margin-bottom:10px"><div style="font-weight:700">잠재 거래처</div><button class="btn primary sm" data-view="disc-leads">전체 리스트 →</button></div>
+  ${leadsTable(leads.slice(0,3))}`;
+}
+function leadsTable(list){
+  return `<div class="card ov"><table>
+    <thead><tr><th>회사명</th><th>지역</th><th>유형</th><th>발굴 채널</th><th>적격성</th><th class="num">우선순위</th><th>상태</th></tr></thead>
+    <tbody>${list.map(l=>`<tr class="clickable" data-lead="${l.id}">
+      <td><b>${l.name}</b></td><td>${l.region}</td><td>${l.type}</td><td class="muted">${l.channel}</td>
+      <td>${l.elig}</td><td class="num"><b>${l.score}</b></td>
+      <td><span class="badge ${l.status==='제안'?'teal':l.status==='심사'?'warn':'muted'}">${l.status}</span></td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function vDiscLeads(){ setHead('잠재 거래처 리스트','고객 발굴 센터'); 
+  return `<div class="pagehead"><div><div class="t">잠재 거래처 리스트</div><div class="d">탐색에서 등록된 리드. 행을 클릭하면 리드 상세로 이동합니다.</div></div><button class="btn">신규 리드 등록</button></div>${leadsTable(leads)}`; }
+
+function vLeadDetail(){
+  const l = leads.find(x=>x.id===state.lead);
+  setHead(l.name,'고객 발굴 센터 · 리드 상세');
+  const checks=[['연 매출액','120억 원','ok'],['종업원 수','45명','ok'],['홈페이지 보유','있음','ok'],['의료기기 판매업 신고','확인 필요','warn']];
+  return `
+  <div class="back" data-view="disc-leads">← 잠재 거래처 리스트</div>
+  <div class="actor" style="margin-bottom:14px">
+    <div class="av">${l.name.slice(0,2)}</div>
+    <div style="flex:1"><div style="font-size:18px;font-weight:700">${l.name} <span class="muted" style="font-size:13px;font-weight:400">(후보)</span></div>
+    <div class="muted" style="font-size:13px">${l.region} · ${l.type} · 발굴 채널: ${l.channel}</div></div>
+    <span class="badge info">우선순위 ${l.score}</span>
+  </div>
+  <div class="kpis" style="margin-bottom:20px">
+    <div class="kpi"><div class="lab">우선순위 점수</div><div class="val">${l.score} <span class="muted" style="font-size:14px">/ 100</span></div></div>
+    <div class="kpi"><div class="lab">예상 연 거래</div><div class="val" style="font-size:21px">3.2억 원</div></div>
+    <div class="kpi"><div class="lab">적격성</div><div class="val" style="font-size:21px">${l.elig}</div></div>
+  </div>
+  <div class="row">
+    <div class="card" style="flex:1;min-width:280px"><div class="pad">
+      <div class="seclabel">적격성 체크</div>
+      <div class="checklist">${checks.map(c=>`<div class="ci"><span class="dotmark" style="background:var(--${c[2]})"></span><span class="nm">${c[0]}</span><span class="${c[2]==='warn'?'':'muted'}" style="font-size:13px;${c[2]==='warn'?'color:var(--warn);font-weight:600':''}">${c[1]}</span></div>`).join('')}</div>
+    </div></div>
+    <div class="card" style="flex:1;min-width:280px"><div class="pad">
+      <div class="seclabel">AI 신용조사 (참고용)</div>
+      <p style="font-size:13.5px;margin:0 0 12px;line-height:1.7">공개 자료 기준 매출 규모 중견, 최근 3년 부정 이슈 없음. 판매 진행에 큰 리스크는 보이지 않음. 정식 신용보고서는 아님.</p>
+      <button class="btn sm" onclick="toast('AI 신용조사 재실행 (프로토타입)')">신용조사 다시 실행</button>
+    </div></div>
+  </div>
+  <div class="seclabel" style="margin-top:20px">빠른 작업</div>
+  <div class="quick">
+    <button class="btn" data-view="proposal">맞춤 제안서 생성</button>
+    <button class="btn" onclick="toast('AI 신용조사 재실행 (프로토타입)')">신용조사 실행</button>
+    <button class="btn primary" id="convertBtn">국내영업으로 이관</button>
+    <button class="btn" id="ovConvertBtn">해외 신규 고객 등록</button>
+  </div>
+  <div class="row" style="margin-top:20px">
+    <div class="card" style="flex:1;min-width:280px"><div class="pad">
+      <div class="seclabel">제안 발송 이력</div>
+      <div class="ledger-list">
+        <div class="li"><div class="ti">제품소개서 발송</div><span class="badge ok">열람함</span><span class="muted" style="font-size:12px;margin-left:8px">06/08</span></div>
+        <div class="li"><div class="ti">맞춤 제안서 v1</div><span class="muted" style="font-size:12px">미열람 · 06/10</span></div>
+      </div>
+    </div></div>
+    <div class="card" style="flex:1;min-width:280px"><div class="pad">
+      <div class="seclabel">진입 요건 (인증 허브)</div>
+      <div class="checklist">
+        <div class="ci"><span class="dotmark" style="background:var(--warn)"></span><span class="nm">의료기기 판매업 신고</span><span style="font-size:13px;color:var(--warn);font-weight:600">확인 필요</span></div>
+        <div class="ci"><span class="dotmark" style="background:var(--ok)"></span><span class="nm">ISO 13485 (당사)</span><span class="muted" style="font-size:13px">유효</span></div>
+      </div>
+    </div></div>
+  </div>`;
+}
+
+/* ---------------- 채권채무조회서 doc ---------------- */
+function docHTML(a, bulk){
+  const today='2026년 6월 30일';
+  return `<div class="doc">
+    <h2>채권·채무조회서</h2>
+    <div class="meta"><div><b>(주) ${a.name}</b> 귀하</div><div>${today}</div></div>
+    <div class="intro">귀사의 번창하심을 축원하오며, 평소 각별하신 애호와 협조에 감사합니다. 2026년 6월 30일 현재 귀사에 대한 당사의 채권·채무 잔액과 내용을 확인하고자 하오니, 귀사의 장부와 대조·확인하시고 아래 확인통지란에 서명·날인하여 회신 바랍니다. (FAX 031-629-5216 또는 E-MAIL fys@bl-tech.co.kr)</div>
+    <table><caption>1. 당사가 받을 금액</caption>
+      <thead><tr><th style="width:38%">계정과목</th><th>적요</th><th class="num" style="width:26%">금액</th><th style="width:14%">비고</th></tr></thead>
+      <tbody>${recvAccounts.map((ac,i)=>`<tr><td>${ac}</td><td></td><td class="num">${i===0&&a.recv>0?fmt(a.recv):''}</td><td></td></tr>`).join('')}
+        <tr class="total"><td colspan="2">합계</td><td class="num">${a.recv>0?fmt(a.recv):'0'}</td><td></td></tr></tbody>
+    </table>
+    <table><caption>2. 당사가 지급할 금액</caption>
+      <thead><tr><th style="width:38%">계정과목</th><th>적요</th><th class="num" style="width:26%">금액</th><th style="width:14%">비고</th></tr></thead>
+      <tbody>${payAccounts.map(ac=>`<tr><td>${ac}</td><td></td><td class="num"></td><td></td></tr>`).join('')}
+        <tr class="total"><td colspan="2">합계</td><td class="num">0</td><td></td></tr></tbody>
+    </table>
+    <div class="notice">확인통지</div>
+    <div class="reply">
+      1. 위 조회서에 기재된 금액과 내용은 당사 장부와 일치하고 있으므로 이에 서명·날인하여 통지합니다.<br>
+      2. 아래와 같은 상위점이 있음을 알려드립니다 (명세·내용·금액 기재, 지면 부족 시 별첨).
+    </div>
+    <div class="sign">
+      <div>${today}<br><br>주소 _______________________<br><br>회사(기관)명 _______________<br><br>대표자 성명 ____________ (인)</div>
+      <div class="stamp"><b>문의처</b> : 이연선<br>BL TECH 주식회사<br>TEL 033-264-2686<br>FAX 031-629-5216<br>조회서번호 32</div>
+    </div>
+  </div>`;
+}
+function vDoc(){
+  const a=findAgency(state.docAgency);
+  setHead('채권채무조회서','국내영업 · 문서 미리보기');
+  return `<div class="back" data-view="dom-agencies">← 대리점 관리로</div>
+  <div class="pagehead"><div><div class="t">채권채무조회서 미리보기</div><div class="d">거래처명과 외상매출금(미수 잔액)이 자동으로 입력되었습니다.</div></div>
+    <button class="btn primary" onclick="toast('${a.name} 앞으로 팩스 발송 (프로토타입)')">팩스 발송</button></div>
+  ${docHTML(a,false)}`;
+}
+
+/* ---------------- bulk modal ---------------- */
+function bulkModal(){
+  const list=curAgencies().filter(a=>state.checked.has(a.id));
+  openModal(`
+    <div class="mh"><b>채권채무조회서 일괄 발송</b><button class="x" onclick="closeModal()">×</button></div>
+    <div class="mb">
+      <div class="muted" style="font-size:12.5px;margin-bottom:12px">선택한 거래처에 거래처명·잔액(외상매출금)이 자동 입력되어 팩스로 발송됩니다. 기준일 2026-06-30.</div>
+      ${list.map(a=>`<div class="check-row"><div style="flex:1"><b>(주) ${a.name}</b> <span class="muted" style="font-size:12px">· ${a.region}</span></div>
+        <div class="num" style="font-weight:600;color:${a.recv>0?'var(--warn)':'var(--ink-3)'}">${a.recv>0?won(a.recv):'잔액 없음'}</div>
+        <button class="btn sm" data-doc="${a.id}" onclick="closeModal()">미리보기</button></div>`).join('')}
+    </div>
+    <div class="mf"><button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" id="bulkSend">${list.length}곳에 팩스 발송</button></div>`);
+}
+
+function vMarket(){
+  setHead('시장분석 · STP','고객 발굴 센터 · 국내·해외 공용');
+  const m=state.market;
+  const regions=regionsOf(m.country);
+  const list=mktList();
+  const opt=(arr,sel)=>arr.map(x=>`<option ${x===sel?'selected':''}>${x}</option>`).join('');
+  let results='';
+  if(m.searched){
+    results=`
+    <div id="mktResults" class="row" style="margin-top:18px">
+      <div class="card" style="flex:1.4;min-width:300px"><div class="pad">
+        <div class="pagehead" style="margin-bottom:10px"><div style="font-weight:700">검색 결과 · 후보 ${list.length}곳</div>
+          <button class="btn primary sm" onclick="toast('선택 후보를 최종 잠재 거래처 리스트에 확정했습니다');setTimeout(()=>go('disc-leads'),750)">최종 리스트에 확정 →</button></div>
+        <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+          <thead><tr><th style="width:30px"><input type="checkbox" class="chk" checked></th><th>회사명</th><th>지역</th><th>규모</th><th>라이선스</th><th class="num">적합도</th></tr></thead>
+          <tbody>${list.length?list.map(f=>`<tr><td><input type="checkbox" class="chk" checked></td><td><b>${f.name}</b></td><td>${f.region}</td><td>${f.size}</td><td>${f.lic?'<span class="badge ok">보유</span>':'<span class="badge warn">확인</span>'}</td><td class="num"><b>${f.fit}</b></td></tr>`).join(''):`<tr><td colspan="6" class="muted" style="padding:18px;text-align:center">조건에 맞는 후보가 없습니다. 조건을 완화해 보세요.</td></tr>`}</tbody>
+        </table></div>
+      </div></div>
+      <div class="card" style="flex:1;min-width:280px;display:flex"><div class="pad" style="display:flex;flex-direction:column;flex:1;width:100%">
+        <div class="seclabel">AI 탐색 비서</div>
+        <div class="chat" id="mktChat">${m.chat.map(c=>`<div class="msg ${c.r}">${c.t}</div>`).join('')}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">
+          <button class="btn sm" onclick="mktAsk('mid','중견 이상만')">중견 이상만</button>
+          <button class="btn sm" onclick="mktAsk('lic','라이선스 보유만')">라이선스 보유만</button>
+          <button class="btn sm" onclick="mktAsk('cast','캐스트 취급만')">캐스트 취급만</button>
+          <button class="btn sm" onclick="mktReset()">초기화</button>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input class="search" id="mktInput" style="flex:1;width:auto" placeholder="예: 매출 큰 곳만 보여줘" onkeydown="if(event.key==='Enter')mktSend()">
+          <button class="btn primary sm" onclick="mktSend()">보내기</button>
+        </div>
+      </div></div>
+    </div>`;
+  }
+  return `
+  <div class="pagehead"><div><div class="t">시장분석 · STP</div><div class="d">국내·해외 공용. 국가·지역·조건을 정해 탐색하면 아래에 결과가 나오고, AI 비서와 대화로 좁혀갑니다.</div></div></div>
+  <div class="card"><div class="pad">
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:16px">
+      <div style="flex:1;min-width:200px"><div class="seclabel">국가 설정 <span class="muted" style="font-weight:400">· 전세계</span></div>
+        <select class="search" style="width:100%" onchange="mktCountry(this.value)">${opt(worldCountries,m.country)}</select></div>
+      <div style="flex:1;min-width:200px"><div class="seclabel">지역 설정 <span class="muted" style="font-weight:400">· 전체 선택 가능</span></div>
+        <select class="search" style="width:100%" onchange="mktRegion(this.value)">${opt(regions,m.region)}</select></div>
+    </div>
+    <div class="seclabel">조건 (STP 타깃)</div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px">
+      <span class="badge teal">유형: 종합병원 납품 유통사</span><span class="badge teal">취급: 캐스트·하이드로겔</span><span class="badge">+ 조건 추가</span>
+    </div>
+    <button class="btn primary" onclick="mktSearch()">STP 조건으로 탐색</button>
+  </div></div>
+  ${results}`;
+}
+
+function vSearch(){
+  setHead('잠재 거래처 탐색','고객 발굴 센터');
+  const narrowed = state.narrowed;
+  const all=[
+    {name:'서울 메디플러스', region:'서울', size:'중견', lic:'보유', src:'B2B 디렉터리', fit:88},
+    {name:'경기 헬스라인', region:'경기', size:'중소', lic:'확인 필요', src:'AI 리서치', fit:64},
+    {name:'인천 정형유통', region:'인천', size:'중견', lic:'보유', src:'전시회 명단', fit:81},
+    {name:'수원 메디칼상사', region:'경기', size:'중견', lic:'보유', src:'B2B 디렉터리', fit:79},
+  ];
+  const list = narrowed ? all.filter(f=>f.fit>=78) : all;
+  const steps=['조건 입력','검색 결과','조건 수정(세부)','최종 확정'];
+  const active = narrowed?2:1;
+  return `
+  <div class="pagehead"><div><div class="t">잠재 거래처 탐색</div><div class="d">조건 입력 → 검색 → 세부 조건으로 좁힘 → 최종 리스트 확정.</div></div></div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px">
+    ${steps.map((s,i)=>`<span class="badge ${i<=active?'teal':'muted'}">${i+1}. ${s}</span>${i<3?'<span style="color:var(--ink-3)">›</span>':''}`).join('')}
+  </div>
+  <div class="card" style="margin-bottom:18px"><div class="pad">
+    <div class="seclabel">검색 조건 ${narrowed?'<span class="badge teal" style="margin-left:4px">세부 조건 적용됨</span>':'<span class="muted" style="font-weight:400">· STP에서 전달</span>'}</div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px">
+      <span class="badge teal">지역: 수도권</span><span class="badge teal">유형: 종합병원 납품 유통사</span><span class="badge teal">취급: 캐스트·하이드로겔</span>
+      ${narrowed?'<span class="badge teal">규모: 중견 이상</span><span class="badge teal">판매 라이선스: 보유</span><span class="badge teal">적합도 ≥ 78</span>':''}
+    </div>
+    <div class="seclabel">세부 조건 추가</div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px">
+      <span class="badge">규모(매출·인원)</span><span class="badge">판매 라이선스 보유</span><span class="badge">취급 품목 일치도</span><span class="badge">거래 이력</span>
+    </div>
+    <div class="quick">
+      <button class="btn primary" onclick="state.narrowed=true;render();toast('세부 조건을 반영해 후보를 좁혔습니다')">${narrowed?'조건 재적용':'세부 조건으로 좁히기'}</button>
+      ${narrowed?'<button class="btn" onclick="state.narrowed=false;render()">조건 초기화</button>':'<button class="btn" onclick="toast(\'수동 추가 — 명함·문의 (프로토타입)\')">수동 추가</button>'}
+    </div>
+  </div></div>
+  <div class="pagehead" style="margin-bottom:10px"><div style="font-weight:700">검색 결과 · 후보 ${list.length}곳</div>
+    <button class="btn primary sm" onclick="toast('선택한 후보를 최종 잠재 거래처 리스트에 확정했습니다');setTimeout(()=>go('disc-leads'),750)">최종 리스트에 확정 →</button></div>
+  <div class="card ov"><table>
+    <thead><tr><th style="width:34px"><input type="checkbox" class="chk" checked></th><th>회사명</th><th>지역</th><th>규모</th><th>판매 라이선스</th><th class="num">적합도</th><th>출처</th></tr></thead>
+    <tbody>${list.map(f=>`<tr><td><input type="checkbox" class="chk" checked></td><td><b>${f.name}</b></td><td>${f.region}</td><td>${f.size}</td>
+      <td>${f.lic==='보유'?'<span class="badge ok">보유</span>':'<span class="badge warn">확인 필요</span>'}</td>
+      <td class="num"><b>${f.fit}</b></td><td class="muted">${f.src}</td></tr>`).join('')}</tbody>
+  </table></div>
+  <div class="muted" style="font-size:12px;margin-top:10px">결과를 보며 세부 조건을 더해 좁히고, 만족스러우면 선택 후보를 최종 리스트에 확정합니다. 기존 리드·거래처 중복은 자동 제외.</div>`;
+}
+
+function vProposal(){
+  const l = leads.find(x=>x.id===state.lead) || leads[0];
+  setHead('제품소개서 · 제안서 작성','고객 발굴 센터');
+  return `
+  <div class="back" data-view="lead">← 리드 상세</div>
+  <div class="pagehead"><div><div class="t">맞춤 제안서 작성</div><div class="d">대상: ${l.name} · 제품 마스터·인증 정보가 자동 반영됩니다.</div></div>
+    <button class="btn primary" onclick="toast('${l.name} 앞으로 제안서를 발송했습니다')">이메일 발송</button></div>
+  <div class="row">
+    <div class="card" style="flex:0 0 230px"><div class="pad">
+      <div class="seclabel">템플릿</div>
+      <div class="ledger-list">
+        <div class="li"><span class="badge teal">선택</span><div class="ti">기본 제품소개서</div></div>
+        <div class="li"><div class="ti muted">맞춤 제안서</div></div>
+        <div class="li"><div class="ti muted">가격 제안</div></div>
+      </div>
+      <div class="seclabel" style="margin-top:14px">자동 반영</div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
+        <span class="badge">제품군 카탈로그</span><span class="badge">ISO 13485 인증서</span><span class="badge">CE MDR 선언</span>
+      </div>
+    </div></div>
+    <div class="card" style="flex:1"><div class="pad">
+      <div class="doc" style="box-shadow:none;border:1px solid var(--border);max-width:none;padding:28px">
+        <h2 style="letter-spacing:.1em;padding:0;font-size:18px">제품 소개 · 제안서</h2>
+        <p style="font-size:13px">${l.name} 귀중</p>
+        <p style="font-size:13px;line-height:1.7">BL TECH는 ISO 13485 품질경영시스템과 FDA·CE MDR 인증을 보유한 정형 고정재 전문 제조사입니다. 캐스트·스플린트·하이드로겔 전 라인업을 안정적 납기로 공급합니다.</p>
+        <table style="margin-top:12px"><thead><tr><th>제품군</th><th>대표 품목</th><th>인증</th></tr></thead>
+          <tbody><tr><td>캐스팅 테이프</td><td>NEAL Casting Tape</td><td>ISO·CE</td></tr>
+          <tr><td>스플린트</td><td>NEAL Splint</td><td>ISO·CE</td></tr>
+          <tr><td>하이드로겔</td><td>Hydrogel 시리즈</td><td>ISO·FDA</td></tr></tbody></table>
+      </div>
+    </div></div>
+  </div>`;
+}
+
+const medStock={ 'NPC-2P-GR':120, 'NHRS-3450N':40, 'NHC-2F-WH':300, 'NPC-3P-GR':0, 'NHPS-3014N':8 };
+const medOrders=[
+  {no:'C26-10482', cust:'대성 메디칼', code:'NPC-2P-GR', item:'NEAL 캐스트 2"', qty:80, date:'2026-06-13', kind:'주문', shipped:false},
+  {no:'C26-10483', cust:'우리 헬스케어', code:'NHRS-3450N', item:'롤 스플린트 3"', qty:60, date:'2026-06-13', kind:'주문', shipped:false},
+  {no:'C26-10485', cust:'한백', code:'NPC-3P-GR', item:'NEAL 캐스트 3"', qty:30, date:'2026-06-13', kind:'주문', shipped:false},
+  {no:'C26-10470', cust:'세정코리아', code:'NHC-2F-WH', item:'하이드로겔 커버 2"', qty:100, date:'2026-06-11', kind:'주문', shipped:false},
+  {no:'C26-10460', cust:'메디홀스', code:'NHPS-3014N', item:'프리컷 3"(샘플)', qty:5, date:'2026-06-13', kind:'샘플요청', shipped:false},
+  {no:'C26-10461', cust:'케이알닥터스', code:'NPC-2P-GR', item:'불량 대체품', qty:6, date:'2026-06-13', kind:'불량대체품', shipped:false},
+];
+function shipVerdict(o){
+  const stock=medStock[o.code]; const st=(stock==null?0:stock);
+  if(o.kind!=='주문') return {lab:o.kind, c:'info', kind:'기타'};
+  if(o.qty>st) return {lab:'재고 부족', c:'danger', kind:'부족'};
+  if(o.date<TODAY.toISOString().slice(0,10)) return {lab:'미출고(대기)', c:'warn', kind:'미출고'};
+  return {lab:'자동 출고의뢰', c:'ok', kind:'정상'};
+}
+function vShipping(){
+  setHead('출고 의뢰','국내영업');
+  const today=TODAY.toISOString().slice(0,10);
+  const todayOrders=medOrders.filter(o=>o.kind==='주문'&&o.date===today).length;
+  const shortCnt=medOrders.filter(o=>o.kind==='주문'&&!o.shipped&&o.qty>(medStock[o.code]||0)).length;
+  const pendCnt=medOrders.filter(o=>o.kind==='주문'&&!o.shipped&&o.date<today).length;
+  const etcCnt=medOrders.filter(o=>['샘플요청','불량대체품','맞교환'].includes(o.kind)).length;
+  const tab = state.shipTab || '메디컬';
+  let body;
+  if(tab==='메디컬'){
+    body=`
+    <div class="card" style="margin:16px 0;border-left:3px solid var(--ok)"><div class="pad" style="display:flex;align-items:center;gap:12px">
+      <span class="dotmark" style="background:var(--ok)"></span>
+      <div style="flex:1"><b style="font-size:13.5px">카페24 주문 실시간 연동됨</b><div class="muted" style="font-size:12px">마지막 동기화 06/13 11:40 · OAuth 연결 정상 · 주문은 보유재고와 자동 매칭</div></div>
+      <button class="btn sm" onclick="toast('카페24에서 주문을 다시 가져왔습니다')">지금 동기화</button>
+    </div></div>
+    <div class="card ov"><table>
+      <thead><tr><th>주문번호</th><th>거래처</th><th>품목(코드)</th><th class="num">수량</th><th class="num">보유재고</th><th>판정 / 구분</th><th></th></tr></thead>
+      <tbody>${medOrders.map(o=>{const v=shipVerdict(o); const st=medStock[o.code]; return `<tr><td>${o.no}<div class="muted" style="font-size:11px">${o.date===today?'당일':o.date.slice(5)}</div></td><td><b>${o.cust}</b></td><td>${o.item}<div class="muted" style="font-size:11px">${o.code}</div></td><td class="num">${fmt(o.qty)}</td><td class="num ${o.kind==='주문'&&o.qty>(st||0)?'':'muted'}" style="${o.kind==='주문'&&o.qty>(st||0)?'color:var(--danger);font-weight:600':''}">${st==null?'—':fmt(st)}</td><td><span class="badge ${v.c}">${v.lab}</span></td><td class="num"><button class="btn sm ${v.c==='ok'?'primary':''}" ${v.c==='danger'?'disabled':''} onclick="toast('${o.no} ${v.c==='danger'?'재고 입고 후 출고':'출고 의뢰 전송'}')">출고 의뢰</button></td></tr>`;}).join('')}</tbody>
+    </table></div>
+    <div class="muted" style="font-size:12px;margin-top:10px">메디컬은 별도 생산출고의뢰서 없이 카페24 주문이 자동 출고 의뢰되며, 보유재고와 매칭해 ‘재고 부족·미출고’를 판정합니다. 예외는 좌측 상단 엑셀 업로드(백업)로 처리합니다.</div>`;
+  } else {
+    const po=[
+      {code:'DAOC-2F-BL', internal:'NHC-2F-BL', color:'파랑', qty:30},
+      {code:'DAOC-2F-WH', internal:'NHC-2F-WH', color:'흰색', qty:170},
+      {code:'DAOC-3F-WH', internal:'NHC-3F-WH', color:'흰색', qty:170},
+      {code:'DAOC-4F-BK', internal:'NHC-4F-BK', color:'검정', qty:40},
+      {code:'DAOC-9X-NN', internal:'미매칭', color:'-', qty:10},
+    ];
+    body=`
+    <div class="pagehead" style="margin:16px 0 10px"><div><div style="font-weight:700">${tab} · PO → 생산출고의뢰서 자동화</div><div class="d">발주 코드를 내부 품명으로 자동 매칭합니다. 미매칭은 등록 후 진행됩니다.</div></div></div>
+    <label style="display:block;border:1.5px dashed var(--border-2);border-radius:10px;padding:18px;text-align:center;cursor:pointer;background:var(--surface-2);margin-bottom:12px">
+      <input type="file" accept=".pdf,.xls,.xlsx,image/*" multiple style="display:none" onchange="poUpload(this)">
+      <div style="font-weight:600;font-size:13px">PO 파일 업로드</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">PDF · 엑셀 · 사진(캡쳐본) — 클릭해서 선택 (여러 개 가능)</div>
+    </label>
+    <div id="poFiles" style="margin-bottom:12px"></div>
+    <div class="card ov"><table>
+      <thead><tr><th>발주 코드 (PO)</th><th>내부 품명</th><th>색상</th><th class="num">수량</th><th>상태</th></tr></thead>
+      <tbody>${po.map(r=>`<tr><td>${r.code}</td><td>${r.internal==='미매칭'?'<span class="muted">—</span>':'<b>'+r.internal+'</b>'}</td><td>${r.color}</td><td class="num">${r.qty}</td>
+        <td>${r.internal==='미매칭'?'<span class="badge danger">미매칭</span>':'<span class="badge ok">매칭됨</span>'}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="quick" style="margin-top:14px">
+      <button class="btn" onclick="toast('미매칭 코드 등록 (1회 등록 후 자동 매칭)')">미매칭 코드 등록</button>
+      <button class="btn primary" onclick="toast('생산출고의뢰서가 생성되었습니다 (색상 자동 반영)')">생산출고의뢰서 생성</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:10px">색상은 거래처 기본값으로 자동 입력되며, PO가 없는 건 등 예외는 수기로 처리합니다.</div>`;
+  }
+  return `
+  <div class="pagehead"><div><div class="t">출고 의뢰</div><div class="d">메디컬·케미컬·하이드로겔 세 분야의 출고를 분야별 탭으로 처리합니다. 상단 요약은 오늘(${today.slice(5).replace('-','/')}) 기준입니다.</div></div></div>
+  <div class="kpis" style="margin-bottom:18px">
+    <div class="kpi"><div class="lab">오늘 총 주문</div><div class="val">${todayOrders}건</div><div class="sub">카페24 당일 주문</div></div>
+    <div class="kpi"><div class="lab">재고 부족</div><div class="val ${shortCnt?'danger':''}">${shortCnt}건</div><div class="sub">주문 수량 &gt; 보유재고</div></div>
+    <div class="kpi"><div class="lab">현재 미출고</div><div class="val ${pendCnt?'warn':''}">${pendCnt}건</div><div class="sub">이전 주문 · 오늘까지 미출고</div></div>
+    <div class="kpi"><div class="lab">기타 출고</div><div class="val">${etcCnt}건</div><div class="sub">샘플·불량대체·맞교환</div></div>
+  </div>
+  <div class="card"><div class="tabs" id="shipTabs">
+    ${['메디컬','케미컬','하이드로겔'].map(t=>`<button class="${t===tab?'active':''}" data-shiptab="${t}">${t}</button>`).join('')}
+  </div><div class="pad" style="padding-top:6px">${body}</div></div>`;
+}
+
+function vFollowup(){
+  setHead('Follow-up & 알림','국내영업');
+  const fu=[
+    {date:'06/14', agency:'대성 메디칼', type:'계약 갱신', note:'D-9, 갱신 협의 통화', tag:'warn'},
+    {date:'06/15', agency:'한백', type:'미수금', note:'30일 초과 — 채권채무조회 대상', tag:'danger'},
+    {date:'06/18', agency:'우리 헬스케어', type:'재방문', note:'견적 후속', tag:'teal'},
+    {date:'06/20', agency:'부산 정형', type:'정기 접촉', note:'미접촉 21일', tag:'muted'},
+  ];
+  return `
+  <div class="pagehead"><div><div class="t">Follow-up &amp; 알림</div><div class="d">규칙 기반 자동 알림이 한곳에 모입니다.</div></div></div>
+  <div class="card ov"><table>
+    <thead><tr><th>예정일</th><th>거래처</th><th>유형</th><th>내용</th><th></th></tr></thead>
+    <tbody>${fu.map(f=>`<tr><td><b>${f.date}</b></td><td>${f.agency}</td><td><span class="badge ${f.tag}">${f.type}</span></td><td class="muted">${f.note}</td>
+      <td class="num"><button class="btn sm" onclick="toast('완료 처리했습니다')">완료</button></td></tr>`).join('')}</tbody>
+  </table></div>
+  <div class="card" style="margin-top:16px"><div class="pad">
+    <div class="seclabel">알림 규칙</div>
+    <div class="muted" style="font-size:13px;line-height:1.9">· 미접촉 N일 경과 · 견적 발송 후 무응답 N일 · 계약 갱신 D-30 · 미수금 기한 초과 · 인증 만료 임박</div>
+  </div></div>`;
+}
+
+function vCertHub(){
+  setHead('인증·규제 관리 허브','공통');
+  const certs=[
+    {n:'ISO 13485', scope:'품질경영시스템', issue:'2024-03-15', exp:'2027-03-14'},
+    {n:'CE MDR',    scope:'유럽 시장 적합성', issue:'2023-06-01', exp:'2028-05-31'},
+    {n:'FDA 등록',  scope:'미국 시장 등록',   issue:'2025-08-20', exp:'2026-08-20'},
+    {n:'일본 현지 등록', scope:'PMDA 등록', issue:'-', exp:'진행중'},
+  ];
+  const cstat=exp=>{ if(exp==='진행중') return {l:'진행중',c:'info'}; const du=daysUntil(exp); if(du<0) return {l:'만료',c:'danger'}; if(du<=90) return {l:'만료 임박 · D-'+du,c:'warn'}; return {l:'유효',c:'ok'}; };
+  const docClasses=[
+    {g:'A', tag:'danger', rule:'항상 전달', docs:'FDA·ISO·CE 인증서'},
+    {g:'B', tag:'warn',   rule:'필요 시',  docs:'CFS (식약처 발급)'},
+    {g:'C', tag:'muted',  rule:'특수 필요 시', docs:'현지 요구 인증'},
+  ];
+  const folders=[
+    {n:'하이드로겔', by:'효과별 분류', items:'인증서 · 시험데이터 · 카탈로그'},
+    {n:'캐스트 · 스플린트', by:'용도별 분류', items:'인증서 · 기술문서 · 카탈로그'},
+  ];
+  return `
+  <div class="pagehead"><div><div class="t">인증·규제 관리 허브</div><div class="d">ISO 13485·FDA·CE MDR을 한곳에서 관리하고, 거래처 배포 문서를 제품군별로 정리합니다.</div></div></div>
+
+  <div class="seclabel">보유 인증 현황</div>
+  <div class="card ov" style="margin-bottom:22px"><table>
+    <thead><tr><th>인증</th><th>범위</th><th>발급일</th><th>만료일</th><th>상태</th></tr></thead>
+    <tbody>${certs.map(c=>{const s=cstat(c.exp); return `<tr><td><b>${c.n}</b></td><td class="muted">${c.scope}</td><td class="muted">${c.issue}</td><td class="muted">${c.exp}</td><td><span class="badge ${s.c}">${s.l}</span></td></tr>`;}).join('')}</tbody>
+  </table></div>
+
+  <div class="seclabel">거래처 전송 서류 분류</div>
+  <div class="row" style="margin-bottom:22px">
+    ${docClasses.map(d=>`<div class="card" style="flex:1;min-width:200px"><div class="pad">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span class="badge ${d.tag}">${d.g}</span><b>${d.rule}</b></div>
+      <div class="muted" style="font-size:13px">${d.docs}</div>
+    </div></div>`).join('')}
+  </div>
+
+  <div class="seclabel">문서 공유함 (제품군별 폴더링)</div>
+  <div class="card"><div class="pad ledger-list">
+    ${folders.map(f=>`<div class="li"><svg width="18" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><div class="ti"><b style="font-weight:600">${f.n}</b> <span class="muted" style="font-size:12px">· ${f.by}</span><div class="muted" style="font-size:12px">${f.items}</div></div><button class="btn sm" onclick="toast('거래처에 공유 (프로토타입)')">공유</button></div>`).join('')}
+  </div></div>
+  <div class="muted" style="font-size:12px;margin-top:10px">발굴 센터는 진입 가능 여부 판단에, 국내·해외영업은 거래처 배포 문서로 이 허브를 참조합니다.</div>`;
+}
+
+function histModal(){
+  const hist=[
+    {date:'2025-12-31', cnt:4, ch:'팩스', reply:'회신 3 / 미회신 1'},
+    {date:'2025-06-30', cnt:5, ch:'팩스', reply:'회신 5 / 미회신 0'},
+    {date:'2024-12-31', cnt:4, ch:'팩스', reply:'회신 4 / 미회신 0'},
+    {date:'2024-06-30', cnt:3, ch:'팩스', reply:'회신 3 / 미회신 0'},
+  ];
+  openModal(`
+    <div class="mh"><b>채권채무조회서 발송 기록</b><button class="x" onclick="closeModal()">×</button></div>
+    <div class="mb">
+      <div class="muted" style="font-size:12.5px;margin-bottom:12px">반기 정기(6월말·12월말) 발송 이력입니다. 행을 누르면 해당 회차의 대상·회신 상세를 볼 수 있습니다.</div>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+        <thead><tr><th>발송일</th><th class="num">대상</th><th>채널</th><th>회신 현황</th><th></th></tr></thead>
+        <tbody>${hist.map(h=>`<tr class="clickable" onclick="toast('${h.date} 회차 상세 (프로토타입)')"><td><b>${h.date}</b></td><td class="num">${h.cnt}곳</td><td>${h.ch}</td><td class="muted">${h.reply}</td><td class="num"><span class="badge ${h.reply.includes('미회신 1')||h.reply.includes('미회신 2')?'warn':'ok'}">${h.reply.includes('미회신 0')?'완료':'진행'}</span></td></tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    <div class="mf"><button class="btn" onclick="closeModal()">닫기</button></div>`);
+}
+
+function unitOf(n){ return n.indexOf('Pre-Cut')>=0?'EA':(n.indexOf('Roll')>=0||n==='Cast')?'Roll':'1EA'; }
+function sendQuote(){ const el=document.getElementById('quoteEmail'); const v=(el&&el.value||'').trim(); if(!v){ toast('받는 사람 이메일을 입력하세요'); return; } toast(v+' 앞으로 견적서를 발송했습니다 (다우오피스)'); }
+function vQuote(){
+  const st=state.suga, idx=sugaGi[st.grade];
+  const now=new Date(), pad=n=>String(n).padStart(2,'0');
+  const y=now.getFullYear(), m=now.getMonth()+1, d=now.getDate();
+  const docno='BL-DT-'+y+pad(m)+pad(d);
+  setHead('견적서 발송','국내영업 · 견적서');
+  let qrows = sugaCommon.map(x=>({name:st.brand+' '+x.n, spec:x.spec, unit:unitOf(x.n), suga:fmt(st.brand==='NEAL'?x.sN:x.sS), price:fmt(x.p[idx])}));
+  if(st.brand==='NEAL' && st.premold) qrows=qrows.concat(premoldLine.map(x=>({name:'NEAL '+x.n, spec:'', unit:'1EA', suga:x.suga!=null?fmt(x.suga):'–', price:fmt(x.price)})));
+  if(st.brand==='NEAL' && st.cover) qrows=qrows.concat(coverLine.map(x=>({name:'NEAL '+x.n, spec:'', unit:'EA', suga:'비급여', price:fmt(x.price)})));
+  const incl=[]; if(st.brand==='NEAL'){ if(st.premold) incl.push('프리몰드'); if(st.cover) incl.push('닐커버'); }
+  return `
+  <div class="back" data-view="dom-dash">← 대시보드</div>
+  <div class="card" style="margin-bottom:16px"><div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <div style="flex:1;min-width:180px"><b>견적서</b> <span class="muted">· ${st.brand} · 단가 등급 ${st.grade}${incl.length?' · '+incl.join('·')+' 포함':''}</span></div>
+    <input class="search" id="quoteEmail" style="min-width:230px" placeholder="받는 사람 이메일 (다우오피스)">
+    <button class="btn" onclick="toast('견적서 PDF 다운로드 (프로토타입)')">PDF 다운로드</button>
+    <button class="btn primary" onclick="sendQuote()">다우오피스로 발송</button>
+  </div></div>
+  <div class="doc">
+    <div style="text-align:center"><b style="font-size:19px">비엘테크(주)</b></div>
+    <div class="muted" style="text-align:center;font-size:11px;margin-bottom:16px">(우) 200-944 강원도 춘천시 퇴계농공로 84 · 전화 033-264-2686 · 팩스 031-629-5216</div>
+    <h2 style="letter-spacing:.3em;padding-left:.3em">견 적 서</h2>
+    <div class="meta">
+      <div>수신 : <input id="quoteTo" value="국내대리점 발주담당자 귀하" style="border:none;border-bottom:1px solid #9aa;font-size:13px;width:220px;font-family:inherit;padding:2px;background:#FAFBFC"><br>제목 : 정형외과용 부목 견적서</div>
+      <div style="text-align:right">문서번호 : ${docno}<br>시행일자 : ${y}년 ${m}월 ${d}일</div>
+    </div>
+    <div class="intro">1. 귀사의 무궁한 발전을 기원합니다.<br>2. 제품 공급가격표(부가세 포함) · NEAL · SMILE 브랜드 견적가 동일</div>
+    <table>
+      <thead><tr><th>품명</th><th>규격</th><th>단위</th><th class="num">보험수가</th><th class="num">견적가</th></tr></thead>
+      <tbody>${qrows.map(r=>`<tr><td>${r.name}</td><td>${r.spec}</td><td>${r.unit}</td><td class="num">${r.suga}</td><td class="num"><b>${r.price}</b></td></tr>`).join('')}</tbody>
+    </table>
+    <div class="reply" style="margin-top:6px">
+      3. 결제조건 : 현금 결제 (익월 말일 현금 결제 / 결제 조건 변동 시 계약단가 변동)<br>
+      &nbsp;&nbsp;&nbsp;결제계좌 : 기업은행 547-000007-01-026 (예금주 : 비엘테크(주))<br>
+      4. 납품조건 : 발주일 출고(매일 14:00 주문마감, 재고 보유 시) · 발주 단위 Cast 100EA / Roll Splint 8EA(6" 4EA), 10만원 미만 발주 시 착불<br>
+      5. 기존 자사제품 납품 병원에 대한 영업행위는 삼가 주시기 바랍니다.<br>
+      6. 거래 조건에 대하여 확인 부탁드립니다.
+    </div>
+    <div style="text-align:center;margin-top:18px;letter-spacing:.2em;color:var(--ink-2)">＊＊＊ 감사합니다 ＊＊＊</div>
+  </div>`;
+}
+
+/* ---------------- router ---------------- */
+/* ================= 반품·교환 / 출고현황·원장 ================= */
+const returnsData=[
+  {date:'2026-02-11', type:'반품', agency:'케이알닥터스', prod:'NPC-3P-GR', qty:6, reason:'불량-개봉전경화', lot:'20251104', defect:true, fb:false, note:'처리 진행'},
+  {date:'2026-03-02', type:'반품', agency:'현대의료홀딩스', prod:'NHRS-4450N', qty:2, reason:'불량-실링미처리', lot:'20251220', defect:true, fb:false, note:''},
+  {date:'2026-04-18', type:'교환', agency:'엠앤엠', prod:'NHPS-3014N', qty:10, reason:'사이즈 오발주', lot:'', defect:false, fb:false, note:'처리 완료'},
+  {date:'2026-05-09', type:'반품', agency:'한백', prod:'NHC-2F-WH', qty:50, reason:'오발주', lot:'', defect:false, fb:false, note:'국제바로병원 직송'},
+  {date:'2026-05-27', type:'반품', agency:'포스메드', prod:'NPC-2P-GR', qty:3, reason:'불량-개봉전경화', lot:'20260119', defect:true, fb:true, note:'피드백처리요청서 기안 완료'},
+  {date:'2026-06-04', type:'반품', agency:'한백', prod:'NHRS-3450N', qty:3, reason:'불량-개봉전경화', lot:'20260318', defect:true, fb:true, note:'피드백처리요청서 기안 완료'},
+  {date:'2025-01-24', type:'반품', agency:'케이알닥터스', prod:'NPC-2P-GR', qty:1, reason:'불량-개봉전경화', lot:'20240318', defect:true, fb:false, note:'처리 완료 · 불량 원인 안내'},
+  {date:'2025-02-06', type:'반품', agency:'현대의료홀딩스', prod:'NPC-2P-GR', qty:14, reason:'불량-개봉전경화', lot:'20240726', defect:true, fb:false, note:'20EA 처리'},
+  {date:'2025-02-06', type:'반품', agency:'현대의료홀딩스', prod:'NHRS-4450N', qty:1, reason:'불량-개봉전경화', lot:'20230620', defect:true, fb:false, note:'처리 완료'},
+  {date:'2025-01-24', type:'반품', agency:'케이알닥터스', prod:'NHRS-3450N', qty:1, reason:'불량-실링미처리', lot:'20210403', defect:true, fb:false, note:'재발 방지 요청'},
+  {date:'2025-03-04', type:'반품', agency:'한백', prod:'NHRS-3450N', qty:3, reason:'불량-개봉전경화', lot:'20240903', defect:true, fb:true, note:'피드백처리요청서 기안 완료'},
+  {date:'2025-01-08', type:'반품', agency:'포스메드', prod:'NHRS-4450F', qty:2, reason:'오발주', lot:'', defect:false, fb:false, note:'원주21세기병원 직송'},
+  {date:'2025-01-15', type:'반품', agency:'한백', prod:'NHC-2F-GR', qty:100, reason:'오발주', lot:'', defect:false, fb:false, note:'국제바로병원 석고실 직송'},
+  {date:'2025-02-03', type:'반품', agency:'엠앤엠', prod:'NHRS-5450N', qty:1, reason:'오발주', lot:'', defect:false, fb:false, note:'처리 완료'},
+  {date:'2025-02-12', type:'교환', agency:'메디트라', prod:'NHPS-2012N', qty:5, reason:'사용자 퇴사', lot:'', defect:false, fb:false, note:'처리 완료'},
+  {date:'2025-08-20', type:'반품', agency:'피앤씨메디컬', prod:'NHC-3F-BL', qty:40, reason:'색상오발주', lot:'', defect:false, fb:false, note:'색상 끝자리 확인 권고'},
+];
+function setReturnFilter(f){ state.retFilter=f; render(); }
+function feedbackModal(i){
+  const r=returnsData[i];
+  openModal(`<div class="mh"><b>피드백처리요청서 — 다우오피스 전자결재 기안</b><button class="x" onclick="closeModal()">×</button></div>
+    <div class="mb">
+      <div class="muted" style="font-size:12px;margin-bottom:12px">아래 내용이 다우오피스 「피드백처리요청서」 양식에 자동 입력되어 기안 화면이 열립니다.</div>
+      <table style="width:100%;font-size:13px"><tbody>
+        <tr><td class="muted" style="width:96px;padding:5px 0">거래처</td><td><b>${r.agency}</b></td></tr>
+        <tr><td class="muted" style="padding:5px 0">구분</td><td>${r.type}</td></tr>
+        <tr><td class="muted" style="padding:5px 0">제품코드</td><td>${r.prod}</td></tr>
+        <tr><td class="muted" style="padding:5px 0">LOT 번호</td><td>${r.lot||'—'}</td></tr>
+        <tr><td class="muted" style="padding:5px 0">수량</td><td>${r.qty}</td></tr>
+        <tr><td class="muted" style="padding:5px 0">불량 사유</td><td>${r.reason}</td></tr>
+        <tr><td class="muted" style="padding:5px 0">발생일</td><td>${r.date}</td></tr>
+      </tbody></table>
+      <div style="margin-top:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:11.5px;color:var(--ink-2);word-break:break-all">연동: 전자결재 기안 API (POST · api.daouoffice.com) → 「피드백처리요청서」 양식 자동 입력 · 기안 상신<br>예시 문서 URL: https://bl-tech.daouoffice.com/gw/app/approval/document/1513473522788470784</div>
+      <div class="muted" style="font-size:11px;margin-top:6px">※ 사전 준비: OpenAPI 인증키 발급 + 해당 양식 외부연동 설정(관리자)</div>
+    </div>
+    <div class="mf"><button class="btn" onclick="closeModal()">취소</button><button class="btn primary" onclick="submitFeedback(${i})">다우오피스에서 기안 상신</button></div>`);
+}
+function submitFeedback(i){ returnsData[i].fb=true; closeModal(); toast('피드백처리요청서 기안 상신 — 대리점 상세 ‘클레임·품질’에 반영되었습니다'); render(); }
+function setRetYear(y){ state.retYear=y; render(); }
+function vReturns(){
+  setHead('반품 · 교환 내역','국내영업');
+  const filt=state.retFilter||'전체';
+  const year=state.retYear||'2026';
+  const years=[...new Set(returnsData.map(r=>r.date.slice(0,4)))].sort().reverse();
+  const inYear=returnsData.filter(r=>r.date.slice(0,4)===year);
+  let rows=returnsData.map((r,i)=>({...r,i})).filter(r=>r.date.slice(0,4)===year);
+  if(filt==='불량') rows=rows.filter(r=>r.defect);
+  else if(filt==='반품') rows=rows.filter(r=>r.type==='반품');
+  else if(filt==='교환') rows=rows.filter(r=>r.type==='교환');
+  const defectCnt=inYear.filter(r=>r.defect).length;
+  const fbPending=inYear.filter(r=>r.defect&&!r.fb).length;
+  return `
+  <div class="pagehead"><div><div class="t">반품 · 교환 내역</div><div class="d">국내 반품/교환 접수 내역. 불량 건은 ‘피드백처리요청서 입력’으로 다우오피스 전자결재에 자동 기안합니다.</div></div>
+    <select class="search" style="width:auto" onchange="setRetYear(this.value)">${years.map(y=>`<option value="${y}" ${y===year?'selected':''}>${y}년</option>`).join('')}</select></div>
+  <div class="kpis" style="margin-bottom:18px">
+    <div class="kpi"><div class="lab">총 내역 (${year})</div><div class="val">${inYear.length}건</div><div class="sub">반품·교환</div></div>
+    <div class="kpi"><div class="lab">불량 건 (${year})</div><div class="val ${defectCnt?'danger':''}">${defectCnt}건</div><div class="sub">피드백처리요청서 대상</div></div>
+    <div class="kpi"><div class="lab">미기안 (${year})</div><div class="val ${fbPending?'warn':''}">${fbPending}건</div><div class="sub">피드백처리요청서 미상신</div></div>
+    <div class="kpi"><div class="lab">발송 양식</div><div class="val" style="font-size:18px">다우오피스</div><div class="sub">전자결재 기안 API</div></div>
+  </div>
+  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${['전체','반품','교환','불량'].map(f=>`<button class="btn" style="${f===filt?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setReturnFilter('${f}')">${f}</button>`).join('')}<div style="flex:1"></div><button class="btn" onclick="toast('엑셀 다운로드 (반품·교환 내역)')">엑셀 다운로드</button><button class="btn primary" data-view="dom-return-new">반품/교환 내역 등록</button></div>
+  <div class="card ov"><table>
+    <thead><tr><th>일자</th><th>구분</th><th>업체명</th><th>제품</th><th class="num">수량</th><th>사유</th><th>LOT</th><th>비고</th><th>피드백처리요청서</th></tr></thead>
+    <tbody>${rows.length?rows.map(r=>`<tr><td>${r.date}</td><td>${r.type}</td><td><b>${r.agency}</b></td><td>${r.prod}</td><td class="num">${r.qty}</td><td>${r.defect?'<span class="badge danger">'+r.reason+'</span>':r.reason}</td><td class="muted">${r.lot||'—'}</td><td class="muted" style="font-size:11.5px">${r.note||''}</td><td>${r.defect?(r.fb?'<span class="badge ok">기안됨</span>':`<button class="btn sm primary" onclick="feedbackModal(${r.i})">입력</button>`):'<span class="muted">—</span>'}</td></tr>`).join(''):`<tr><td colspan="9" class="muted" style="padding:16px;text-align:center">${year}년 내역이 없습니다.</td></tr>`}</tbody>
+  </table></div>
+  <div class="muted" style="font-size:12px;margin-top:10px">불량 사유(개봉전경화·실링미처리 등) 건만 ‘입력’ 버튼이 활성화됩니다. 기안된 건은 해당 대리점 상세 ‘클레임·품질’ 탭에 자동 반영됩니다.</div>`;
+}
+function vReturnNew(){
+  setHead('반품/교환 내역 등록','국내영업');
+  const today=TODAY.toISOString().slice(0,10);
+  return `
+  <div class="back" data-view="dom-returns">← 반품 · 교환 내역</div>
+  <div class="pagehead"><div><div class="t">반품/교환 내역 등록</div><div class="d">아래 양식을 입력해 새 내역을 추가합니다. 사유에 ‘불량’이 포함되면 등록 후 피드백처리요청서 입력 버튼이 활성화됩니다.</div></div></div>
+  <div class="card" style="max-width:680px"><div class="pad">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:11px"><label class="muted" style="width:90px;font-size:13px">일자</label><input id="rnDate" type="date" value="${today}" style="flex:1;border:1px solid var(--border-2);border-radius:7px;padding:8px 10px;font-family:inherit;font-size:13px;box-sizing:border-box"></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:11px"><label class="muted" style="width:90px;font-size:13px">구분</label><select id="rnType" style="flex:1;border:1px solid var(--border-2);border-radius:7px;padding:8px 10px;font-family:inherit;font-size:13px"><option>반품</option><option>교환</option></select></div>
+    ${[['rnAgency','업체명',''],['rnProd','제품(코드)',''],['rnQty','수량','number'],['rnLot','LOT 번호',''],['rnReason','사유',''],['rnNote','비고','']].map(f=>`<div style="display:flex;align-items:center;gap:12px;margin-bottom:11px"><label class="muted" style="width:90px;font-size:13px">${f[1]}</label><input id="${f[0]}" type="${f[2]==='number'?'number':'text'}" ${f[0]==='rnReason'?'placeholder=\"예) 불량-개봉전경화 / 오발주 / 사이즈 교환\"':''} style="flex:1;border:1px solid var(--border-2);border-radius:7px;padding:8px 10px;font-family:inherit;font-size:13px;box-sizing:border-box"></div>`).join('')}
+    <div class="quick" style="margin-top:8px"><button class="btn" data-view="dom-returns">취소</button><button class="btn primary" onclick="saveReturn()">등록</button></div>
+  </div></div>`;
+}
+function saveReturn(){
+  const g=id=>document.getElementById(id);
+  const date=g('rnDate').value, type=g('rnType').value, agency=g('rnAgency').value.trim(),
+        prod=g('rnProd').value.trim(), qty=+g('rnQty').value||0, lot=g('rnLot').value.trim(),
+        reason=g('rnReason').value.trim(), note=g('rnNote').value.trim();
+  if(!date||!agency||!prod){ toast('일자·업체명·제품은 필수입니다'); return; }
+  const defect=/불량/.test(reason);
+  returnsData.unshift({date,type,agency,prod,qty,reason,lot,defect,fb:false,note});
+  state.retYear=date.slice(0,4);
+  toast('반품·교환 내역이 등록되었습니다');
+  go('dom-returns');
+}
+
+const ledgerTargets={
+  '원장':[
+    {name:'수성위재', grade:'B', note:'당월만', fmt:'PDF', via:'팩스', dest:'02-xxx-1234'},
+    {name:'한독메디텍', grade:'C', note:'', fmt:'엑셀', via:'메일', dest:'order@handok.kr'},
+    {name:'케이알닥터스', grade:'A', note:'', fmt:'둘다', via:'메일', dest:'krd@krdoctors.kr'},
+    {name:'제이알(JR)메디칼', grade:'', note:'말일 전', fmt:'PDF', via:'팩스', dest:'031-xxx-5678'},
+    {name:'한백메디칼', grade:'', note:'당월만', fmt:'PDF', via:'팩스', dest:'02-xxx-9001'},
+    {name:'에스메디텍', grade:'', note:'', fmt:'엑셀', via:'메일', dest:'sm@smeditech.kr'},
+  ],
+  '출고현황':[
+    {name:'세정코리아', grade:'A', note:'', fmt:'엑셀', via:'메일', dest:'sj@sjkorea.kr'},
+    {name:'수성위재', grade:'', note:'', fmt:'PDF', via:'팩스', dest:'02-xxx-1234'},
+    {name:'한스메디션', grade:'A', note:'', fmt:'둘다', via:'메일', dest:'hans@hms.kr'},
+    {name:'제이원메딕스', grade:'B', note:'', fmt:'PDF', via:'팩스', dest:'051-xxx-2345'},
+    {name:'데이케어(한강메디칼)', grade:'B', note:'', fmt:'엑셀', via:'메일', dest:'daycare@hg.kr'},
+    {name:'메디홀스', grade:'B', note:'', fmt:'PDF', via:'팩스', dest:'02-xxx-6789'},
+  ],
+  '채권채무조회서':[
+    {name:'한백', grade:'A+', note:'미수 잔액', fmt:'PDF', via:'팩스', dest:'02-xxx-9001', recv:8400000},
+    {name:'대성 메디칼', grade:'A', note:'미수 잔액', fmt:'엑셀', via:'메일', dest:'daesung@dm.kr', recv:3200000},
+    {name:'부산 정형', grade:'B', note:'미수 잔액', fmt:'PDF', via:'팩스', dest:'051-xxx-2345', recv:1500000},
+  ],
+};
+const ledgerTabs=['원장','출고현황','채권채무조회서'];
+const fmtBadge=f=>({'엑셀':'ok','PDF':'info','둘다':'teal'}[f]||'muted');
+function setLedgerTab(t){ state.ledgerTab=t; render(); }
+function ledgerToggle(k){ const y=window.scrollY; if(state.ledgerChk.has(k)) state.ledgerChk.delete(k); else state.ledgerChk.add(k); render(); window.scrollTo(0,y); }
+function ledgerCheckAll(group){ const y=window.scrollY; const keys=ledgerTargets[group].map(t=>group+'::'+t.name); const allOn=keys.every(k=>state.ledgerChk.has(k)); keys.forEach(k=>{ allOn?state.ledgerChk.delete(k):state.ledgerChk.add(k); }); render(); window.scrollTo(0,y); }
+function ledgerSet(group,name,field,val){ const y=window.scrollY; const it=ledgerTargets[group].find(t=>t.name===name); if(it) it[field]=val; render(); window.scrollTo(0,y); }
+function ledgerSend(group){ const sel=[...state.ledgerChk].filter(k=>k.startsWith(group+'::')); if(!sel.length){ toast('발송할 거래처를 선택하세요'); return; } const faxN=sel.filter(k=>{const n=k.split('::')[1]; const it=ledgerTargets[group].find(t=>t.name===n); return it&&it.via==='팩스';}).length; toast(group+' '+sel.length+'개사 발송 — 팩스 '+faxN+' / 메일 '+(sel.length-faxN)+' (각 거래처 형식·경로 적용)'); }
+function vLedger(){
+  setHead('출고현황 · 원장 발송','국내영업');
+  const now=new Date(); const mLabel=(now.getMonth()+1)+'월';
+  const tab=state.ledgerTab||'원장';
+  const list=ledgerTargets[tab];
+  const keys=list.map(t=>tab+'::'+t.name);
+  const allOn=keys.every(k=>state.ledgerChk.has(k));
+  const selN=keys.filter(k=>state.ledgerChk.has(k)).length;
+  const isRecv=tab==='채권채무조회서';
+  const desc={'원장':'매달 원장 — 매출 마감 후 발송. 거래처별 파일형식(엑셀/PDF/둘다)·전송방법(팩스/메일)·경로가 다릅니다.','출고현황':'매달 출고현황 — 월말 발송. 거래처별 파일형식·전송방법·경로 적용.','채권채무조회서':'반기말(6/30·12/31) 기준 잔액 보유 거래처에 발송(대리점 관리에서 이동). 회신처 FAX 031-629-5216.'}[tab];
+  return `
+  <div class="pagehead"><div><div class="t">출고현황 · 원장 발송</div><div class="d">원장·출고현황·채권채무조회서를 탭으로 나눠 발송합니다. 파일형식(엑셀/PDF/둘다)은 ‘보내는 파일’, 팩스/메일은 ‘보내는 방법’이며 거래처별로 다릅니다.</div></div></div>
+  <div class="card"><div class="tabs" id="ledgerTabs">${ledgerTabs.map(t=>`<button class="${t===tab?'active':''}" onclick="setLedgerTab('${t}')">${t}</button>`).join('')}</div>
+  <div class="pad" style="padding-top:8px">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <span class="badge teal">${isRecv?'기준 '+now.getFullYear()+'년 반기말':'기준 '+now.getFullYear()+'년 '+mLabel+' 마감'}</span>
+      <span class="muted" style="font-size:12px">${desc}</span>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="toast('${isRecv?'반기 잔액 불러오기 (영림원 ERP)':'이번 달 마감 데이터 불러오기 (영림원 ERP 엑셀 반자동)'}')">${isRecv?'잔액 불러오기':'마감 데이터 불러오기'}</button>
+    </div>
+    <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="ledgerCheckAll('${tab}')"></th><th>거래처</th><th>등급</th>${isRecv?'<th class="num">미수 잔액</th>':'<th>특이</th>'}<th>파일형식</th><th>전송방법</th><th>경로</th></tr></thead>
+      <tbody>${list.map(t=>{const k=tab+'::'+t.name; return `<tr>
+        <td><input type="checkbox" ${state.ledgerChk.has(k)?'checked':''} onclick="ledgerToggle('${k}')"></td>
+        <td><b>${t.name}</b></td>
+        <td>${t.grade?gradeBadge(t.grade):'<span class="muted">—</span>'}</td>
+        ${isRecv?`<td class="num" style="color:var(--warn);font-weight:600">${won(t.recv)}</td>`:`<td>${t.note?'<span class="badge warn">'+t.note+'</span>':'<span class="muted">—</span>'}</td>`}
+        <td><select onchange="ledgerSet('${tab}','${t.name}','fmt',this.value)" style="border:1px solid var(--border-2);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:12px">${['엑셀','PDF','둘다'].map(o=>`<option ${t.fmt===o?'selected':''}>${o}</option>`).join('')}</select></td>
+        <td><select onchange="ledgerSet('${tab}','${t.name}','via',this.value)" style="border:1px solid var(--border-2);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:12px">${['팩스','메일'].map(o=>`<option ${t.via===o?'selected':''}>${o}</option>`).join('')}</select></td>
+        <td class="muted" style="font-size:12px">${t.dest}</td>
+      </tr>`;}).join('')}</tbody>
+    </table></div>
+    <div class="quick" style="margin-top:13px"><button class="btn primary" onclick="ledgerSend('${tab}')">선택 발송 (${selN})</button><button class="btn" onclick="histModal()">발송 기록</button></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">파일형식·전송방법은 거래처별로 저장됩니다(셀렉트 변경 시 적용). 발송은 각 거래처의 형식·경로로 일괄 처리됩니다.</div>
+  </div></div>`;
+}
+
+/* ================= 해외영업 ================= */
+const nealCatalog=[
+  {grp:'Casting Tape · Rigid (P)', moq:'500 Rolls', items:[['NPC-1P','1"×2.4yd',1.10,0.99],['NPC-2P','2"×4yd',1.50,1.35],['NPC-3P','3"×4yd',1.70,1.53],['NPC-4P','4"×4yd',2.00,1.80],['NPC-5P','5"×4yd',2.30,2.07],['NPC-6P','6"×4yd',2.50,2.25]]},
+  {grp:'Casting Tape · Rigid Fiberglass (F)', moq:'500 Rolls', items:[['NPC-1F','1"×2.4yd',1.30,1.17],['NPC-2F','2"×4yd',1.60,1.44],['NPC-3F','3"×4yd',1.80,1.62],['NPC-4F','4"×4yd',2.10,1.89],['NPC-5F','5"×4yd',2.40,2.16],['NPC-6F','6"×4yd',2.60,2.34]]},
+  {grp:'Casting Tape · Soft Polyester (S)', moq:'500 Rolls', items:[['NPS-1P','1"×2.4yd',1.20,1.08],['NPS-2P','2"×4yd',1.60,1.44],['NPS-3P','3"×4yd',1.80,1.62],['NPS-4P','4"×4yd',2.10,1.89],['NPS-5P','5"×4yd',2.40,2.16],['NPS-6P','6"×4yd',2.60,2.34]]},
+  {grp:'Roll Splint · Non-woven', moq:'50 Rolls', items:[['NHRS-2450N','2"×15ft',26.00,23.40],['NHRS-3450N','3"×15ft',32.00,28.80],['NHRS-4450N','4"×15ft',40.00,36.00],['NHRS-5450N','5"×15ft',46.00,41.40],['NHRS-6450N','6"×15ft',53.00,47.70]]},
+  {grp:'Roll Splint · Fiberglass', moq:'50 Rolls', items:[['NHRS-2450F','2"×15ft',28.60,25.74],['NHRS-3450F','3"×15ft',35.20,31.68],['NHRS-4450F','4"×15ft',44.00,39.60],['NHRS-5450F','5"×15ft',50.60,45.54],['NHRS-6450F','6"×15ft',58.30,52.47]]},
+  {grp:'Roll Splint · Single Polyester', moq:'50 Rolls', items:[['NHRS-2450SP','2"×15ft',26.00,23.40],['NHRS-3450SP','3"×15ft',32.00,28.80],['NHRS-4450SP','4"×15ft',40.00,36.00],['NHRS-5450SP','5"×15ft',46.00,41.40],['NHRS-6450SP','6"×15ft',53.00,47.70]]},
+  {grp:'Precut Splint · Non-woven', moq:'20 Boxes', items:[['NHPS-2012N','2"×12"',3.20,2.88],['NHPS-3014N','3"×14"',4.00,3.60],['NHPS-3040N','3"×40"',9.50,8.55],['NHPS-4018N','4"×18"',5.50,4.95],['NHPS-4034N','4"×34"',9.50,8.55],['NHPS-5034N','5"×34"',11.00,9.90],['NHPS-5050N','5"×50"',15.50,13.95],['NHPS-6034N','6"×34"',13.00,11.70],['NHPS-6050N','6"×50"',17.50,15.75]]},
+  {grp:'Precut Splint · Fiberglass', moq:'20 Boxes', items:[['NHPS-2012F','2"×12"',3.52,3.17],['NHPS-3014F','3"×14"',4.40,3.96],['NHPS-3040F','3"×40"',10.45,9.41],['NHPS-4018F','4"×18"',6.05,5.45],['NHPS-4034F','4"×34"',10.45,9.41],['NHPS-5034F','5"×34"',12.10,10.89],['NHPS-5050F','5"×50"',17.05,15.35],['NHPS-6034F','6"×34"',14.30,12.87],['NHPS-6050F','6"×50"',19.25,17.33]]},
+  {grp:'Precut Splint · Single Polyester', moq:'20 Boxes', items:[['NHPS-2012SP','2"×12"',3.20,2.88],['NHPS-3014SP','3"×14"',4.00,3.60],['NHPS-3040SP','3"×40"',9.50,8.55],['NHPS-4018SP','4"×18"',5.50,4.95],['NHPS-4034SP','4"×34"',9.50,8.55],['NHPS-5034SP','5"×34"',11.00,9.90],['NHPS-5050SP','5"×50"',15.50,13.95],['NHPS-6034SP','6"×34"',13.00,11.70],['NHPS-6050SP','6"×50"',17.50,15.75]]},
+  {grp:'Under-pad · Roll', moq:'6~16 Rolls', items:[['NUP-1100','1"×33ft',13.50,12.15],['NUP-2100','2"×33ft',17.00,15.30],['NUP-3100','3"×33ft',22.00,19.80],['NUP-4100','4"×33ft',27.50,24.75],['NUP-5100','5"×33ft',33.00,29.70],['NUP-6100','6"×33ft',38.50,34.65]]},
+  {grp:'Under-pad · Pcs', moq:'20 Boxes', items:[['NUPP-2050','2"×20"',1.00,0.90],['NUPP-2080','2"×32"',1.40,1.26],['NUPP-3050','3"×20"',1.20,1.08],['NUPP-3080','3"×32"',1.90,1.71],['NUPP-4050','4"×20"',1.50,1.35],['NUPP-4080','4"×32"',2.30,2.07],['NUPP-5080','5"×32"',2.80,2.52],['NUPP-5120','5"×48"',4.10,3.69],['NUPP-6080','6"×32"',3.20,2.88],['NUPP-6120','6"×48"',4.70,4.23]]},
+];
+const ovAgencies = [
+  {id:'o1', name:'Tokyo Medical Co.', country:'일본', field:'메디컬', inco:'FOB', pay:'T/T', cur:'JPY', fwd:'우리 지정 포워더(오셔) · 해상 FCL', cycle:30, lastDays:18},
+  {id:'o2', name:'DAONSA', country:'멕시코', field:'하이드로겔', inco:'FOB', pay:'T/T', cur:'USD', fwd:'고객사 포워더 수배 · 해상', cycle:45, lastDays:47},
+  {id:'o3', name:"YOVANN'S CO", country:'프랑스', field:'메디컬', inco:'DAP', pay:'T/T', cur:'USD', fwd:'우리 지정 포워더 · 항공', cycle:35, lastDays:30},
+  {id:'o4', name:'Oce Inc.', country:'미국', field:'메디컬', inco:'EXW', pay:'T/T', cur:'USD', fwd:'고객사 포워더 수배', cycle:28, lastDays:33},
+  {id:'o5', name:'Rakesh Surgicals', country:'인도', field:'케미컬', inco:'FOB', pay:'T/T', cur:'USD', fwd:'고객사 포워더 수배 · 해상', cycle:21, lastDays:38},
+  {id:'o6', name:'Gulf Plant Materials', country:'UAE', field:'플랜트', inco:'CIF', pay:'L/C', cur:'USD', fwd:'우리 지정 포워더 · 해상 CIF', cycle:60, lastDays:20},
+];
+const ovOrders = [
+  {pi:'P12810', agency:'Tokyo Medical Co.', country:'일본', field:'메디컬', cur:'JPY', amount:3850000, inco:'FOB', stage:'선적', dep:true, bal:false, etd:'06/18'},
+  {pi:'P12747', agency:'DAONSA', country:'멕시코', field:'하이드로겔', cur:'USD', amount:48200, inco:'FOB', stage:'생산', dep:true, bal:false, etd:'06/22'},
+  {pi:'P12760', agency:"YOVANN'S CO", country:'프랑스', field:'메디컬', cur:'USD', amount:12600, inco:'DAP', stage:'PI 발행', dep:false, bal:false, etd:'06/30'},
+  {pi:'P12733', agency:'Oce Inc.', country:'미국', field:'메디컬', cur:'USD', amount:21400, inco:'EXW', stage:'수출서류', dep:true, bal:true, etd:'06/12'},
+  {pi:'P12790', agency:'Rakesh Surgicals', country:'인도', field:'케미컬', cur:'USD', amount:9800, inco:'FOB', stage:'정산', dep:true, bal:true, etd:'06/05'},
+  {pi:'P12771', agency:'Gulf Plant Materials', country:'UAE', field:'플랜트', cur:'USD', amount:64500, inco:'CIF', stage:'생산', dep:true, bal:false, etd:'06/27'},
+];
+const ovPOInbox = [
+  {id:0, from:'DAONSA', mail:'po@daonsa.mx', subj:'Purchase Order P12747 - Hydrogel', date:'06/12', matched:false,
+   body:`Dear BL TECH,\n\nPlease find attached our purchase order P12747.\nKindly confirm the PI and lead time.\n\nItems:\n- DAOC-2010  x 2,000 pcs\n- DAOC-3012  x 1,500 pcs\n- DAOC-9988  x 500 pcs (new item)\n\nIncoterm: FOB Busan\nPayment: T/T 30/70\n\nBest regards,\nDAONSA Purchasing`,
+   atts:[{name:'PO-Orden_de_compra_P12747.pdf', type:'pdf'}],
+   pi:{no:'P12747', cur:'USD', inco:'FOB', lines:[['DAOC-2010 → NHC-2010','하이드로겔 커버 2010',2000,'BL'],['DAOC-3012 → NHC-3012','하이드로겔 커버 3012',1500,'WH'],['DAOC-9988 → ?','미매칭 코드',500,'?']]}},
+  {id:1, from:'Tokyo Medical', mail:'order@tokyomed.jp', subj:'PO-219996 June Tokyo', date:'06/10', matched:true,
+   body:`BL TECH 영업팀 귀하\n\n6월 주문서(PO-219996) 송부드립니다. 첨부 확인 부탁드립니다.\n\nNPC-2P x 500 Rolls\nNHRS-3450N x 50 Rolls\n\nIncoterm: FOB Busan / T/T 30/70\n\nTokyo Medical Co.`,
+   atts:[{name:'PO-219996_June_Tokyo.xls', type:'xls'},{name:'생산출고의뢰서_시그맥스.xlsx', type:'xls'}],
+   pi:{no:'P12811', cur:'JPY', inco:'FOB', lines:[['NPC-2P','Rigid Casting 2"',500,'—'],['NHRS-3450N','Roll Splint NW 3"',50,'—']]}},
+  {id:2, from:'Rakesh Surgicals', mail:'rakesh@surgicals.in', subj:'New PO - chemical line', date:'06/09', matched:true,
+   body:`Hello,\n\nNew PO attached. Please proceed.\n\nThank you,\nRakesh`,
+   atts:[{name:'PO_Rakesh_0609.pdf', type:'pdf'}],
+   pi:{no:'P12812', cur:'USD', inco:'FOB', lines:[['NHPS-5034N','Precut Splint 5"×34"',200,'—']]}},
+];
+function ovField(){ return state.ovField||'메디컬'; }
+function setOvField(f){ state.ovField=f; render(); }
+function ovFieldTabs(){ return `<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">${['메디컬','케미컬','하이드로겔','플랜트'].map(f=>`<button class="btn" style="${f===ovField()?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setOvField('${f}')">${f}</button>`).join('')}</div>`; }
+function ovMoney(n,cur){ return (cur==='USD'?'$':cur==='JPY'?'¥':'₩')+fmt(n); }
+function payBadge(ok){ return ok?'<span class="badge ok">입금완료</span>':'<span class="badge danger">미입금</span>'; }
+function ovSend(inputId,label){ const el=document.getElementById(inputId); const v=(el&&el.value||'').trim(); if(!v){ toast('받는 사람 이메일을 입력하세요'); return; } toast(v+' 앞으로 '+label+'을(를) 발송했습니다 (Outlook)'); }
+function fxSet(r){ const y=window.scrollY; state.fxRange=r; render(); window.scrollTo(0,y); }
+function fxSeries(range){
+  const n={'1W':7,'1M':30,'3M':45,'1Y':52}[range]||30;
+  const stepDays={'1W':1,'1M':1,'3M':2,'1Y':7}[range]||1;
+  const usd=[],jpy=[],labels=[];
+  for(let i=n-1;i>=0;i--){
+    const d=new Date(TODAY); d.setDate(d.getDate()-i*stepDays); const t=n-1-i;
+    const u=1382 + Math.sin(t/4)*13 + Math.sin(t/9)*20 + (((t*37)%11)-5);
+    const j=905 + Math.cos(t/5)*8 + Math.sin(t/11)*12 + (((t*23)%9)-4);
+    usd.push(Math.round(u*10)/10); jpy.push(Math.round(j*10)/10);
+    labels.push((d.getMonth()+1)+'/'+d.getDate());
+  }
+  return {labels,usd,jpy};
+}
+function fxChart(h){
+  h=h||210; const s=fxSeries(state.fxRange||'1M');
+  const all=s.usd.concat(s.jpy); let mn=Math.min.apply(null,all), mx=Math.max.apply(null,all);
+  const pd=(mx-mn)*0.18||10; mn-=pd; mx+=pd;
+  const W=720,H=h,L=46,Rp=14,Tp=10,Bp=22, pw=W-L-Rp, ph=H-Tp-Bp, n=s.labels.length;
+  const X=i=> L + (n<=1?pw/2:i*(pw/(n-1)));
+  const Y=v=> Tp + ph - ((v-mn)/(mx-mn))*ph;
+  const line=arr=>arr.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
+  let grid=''; for(let g=0;g<=4;g++){ const yy=Tp+ph*g/4, val=mx-(mx-mn)*g/4; grid+=`<line x1="${L}" y1="${yy.toFixed(1)}" x2="${W-Rp}" y2="${yy.toFixed(1)}" stroke="var(--border)"/><text x="${L-6}" y="${(yy+3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--ink-3)">${Math.round(val)}</text>`; }
+  let xl=''; const stp=Math.max(1,Math.round(n/6)); for(let i=0;i<n;i+=stp){ xl+=`<text x="${X(i).toFixed(1)}" y="${H-6}" text-anchor="middle" font-size="10" fill="var(--ink-3)">${s.labels[i]}</text>`; }
+  const dots=(arr,lab)=>arr.map((v,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="6" fill="transparent"><title>${s.labels[i]} · ${lab} ${fmt(v)}원</title></circle>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:760px;display:block">${grid}<path d="${line(s.usd)}" fill="none" stroke="var(--teal)" stroke-width="2.2"/><path d="${line(s.jpy)}" fill="none" stroke="var(--navy-2)" stroke-width="2.2"/>${dots(s.usd,'USD')}${dots(s.jpy,'100엔')}${xl}</svg>`;
+}
+
+function vOvDash(){
+  setHead('대시보드','해외영업 · '+ovField());
+  const f=ovField(), orders=ovOrders.filter(o=>o.field===f);
+  const usdSales=orders.filter(o=>o.cur==='USD').reduce((s,o)=>s+o.amount,0);
+  const jpySales=orders.filter(o=>o.cur==='JPY').reduce((s,o)=>s+o.amount,0);
+  const noDep=orders.filter(o=>!o.dep).length;
+  const noBal=orders.filter(o=>o.dep&&!o.bal).length;
+  const inShip=orders.filter(o=>['생산','선적','수출서류'].includes(o.stage)).length;
+  const s=fxSeries(state.fxRange||'1M'); const usdT=s.usd[s.usd.length-1], jpyT=s.jpy[s.jpy.length-1];
+  const reorder=ovAgencies.filter(a=>a.field===f && a.lastDays>=a.cycle*0.9).sort((x,y)=>y.lastDays/y.cycle-x.lastDays/x.cycle);
+  const alerts=[
+    {tag:'danger',t:"PI 미발행 — P12760 (YOVANN'S CO)",s:'PO 수령됨 · PI 자동생성 대기'},
+    {tag:'warn',t:'잔금 미입금 — P12810 (Tokyo Medical)',s:'B/L 발행 예정 · 잔금 70% 확인'},
+    {tag:'warn',t:'선적 D-3 — P12747 (DAONSA)',s:'ETD 06/22 · 포워더 스케줄 확정'},
+  ];
+  return `
+  ${ovFieldTabs()}
+  <div class="kpis" style="margin-bottom:20px">
+    <div class="kpi"><div class="lab">수출 매출 (진행 PI)</div><div class="val">$${fmt(usdSales)}</div><div class="sub">${jpySales?'+ ¥'+fmt(jpySales)+' · ':''}${f}</div></div>
+    <div class="kpi"><div class="lab">선금 미입금 PI</div><div class="val ${noDep?'danger':''}">${noDep}건</div><div class="sub">PI 넘버 기준</div></div>
+    <div class="kpi"><div class="lab">잔금 미입금 PI</div><div class="val ${noBal?'warn':''}">${noBal}건</div><div class="sub">B/L 발행 후 70%</div></div>
+    <div class="kpi"><div class="lab">진행 선적</div><div class="val">${inShip}건</div><div class="sub">생산·선적·수출서류</div></div>
+  </div>
+  <div class="row">
+    <div class="card" style="flex:1.4;min-width:330px"><div class="pad">
+      <div class="seclabel">재주문 알림 (주문 주기 기준)</div>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+        <thead><tr><th>거래처</th><th class="num">평균 주기</th><th class="num">경과</th><th>상태</th><th></th></tr></thead>
+        <tbody>${reorder.length?reorder.map(a=>{const due=a.lastDays>=a.cycle; return `<tr><td><b>${a.name}</b><div class="muted" style="font-size:11px">${a.country}</div></td><td class="num">${a.cycle}일</td><td class="num">${a.lastDays}일</td><td><span class="badge ${due?'danger':'warn'}">${due?'재주문 도래':'임박'}</span></td><td class="num"><button class="btn sm" data-view="ov-agencies">거래처 보기</button></td></tr>`;}).join(''):'<tr><td colspan="5" class="muted" style="padding:14px;text-align:center">재주문 임박 거래처 없음</td></tr>'}</tbody>
+      </table></div>
+      <div class="muted" style="font-size:12px;margin-top:8px">거래처별 평균 주문 주기 대비 경과일로 재주문 시점을 알려줍니다(국내 주문 주기 알림과 동일).</div>
+    </div></div>
+    <div class="card" style="flex:1;min-width:260px"><div class="pad">
+      <div class="seclabel">알림</div>
+      <div class="ledger-list">${alerts.map(x=>`<div class="li"><span class="dotmark" style="background:var(--${x.tag})"></span><div class="ti"><div style="font-size:13px;font-weight:600">${x.t}</div><div class="muted" style="font-size:12px">${x.s}</div></div></div>`).join('')}</div>
+    </div></div>
+  </div>
+  <div class="card" style="margin:18px 0"><div class="pad">
+    <div class="seclabel">PI 입금 현황 (선금 30 / 잔금 70)</div>
+    <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <thead><tr><th>PI No.</th><th>거래처</th><th class="num">금액</th><th>선금</th><th>잔금</th><th>단계</th></tr></thead>
+      <tbody>${orders.map(o=>`<tr><td><b>${o.pi}</b></td><td>${o.agency}<div class="muted" style="font-size:11px">${o.country}</div></td><td class="num">${ovMoney(o.amount,o.cur)}</td><td>${payBadge(o.dep)}</td><td>${payBadge(o.bal)}</td><td><span class="badge ${o.stage==='정산'?'ok':o.stage==='PI 발행'?'muted':'info'}">${o.stage}</span></td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">입금 루틴이 거래처마다 달라, PI 넘버로 선금·잔금 입금 여부를 확인합니다.</div>
+  </div></div>
+  <div class="card"><div class="pad">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+      <div class="seclabel" style="margin:0">환율 <span class="muted" style="font-weight:400">· USD ${fmt(usdT)}원 · 100엔 ${fmt(jpyT)}원</span></div>
+      <select class="search" style="width:auto;padding:5px 9px;font-size:12px" onchange="fxSet(this.value)">${[['1W','1주'],['1M','1개월'],['3M','3개월'],['1Y','1년']].map(([v,l])=>`<option value="${v}" ${(state.fxRange||'1M')===v?'selected':''}>${l}</option>`).join('')}</select>
+    </div>
+    ${fxChart(120)}
+    <div class="muted" style="font-size:11px;margin-top:2px">점에 마우스를 올리면 일자·환율이 표시됩니다. USD 기본 + 엔화 동시 표시. (실데이터는 환율 API 연동)</div>
+  </div></div>`;
+}
+
+function setPlMode(m){ state.plMode=m; render(); }
+function vOvPricelist(){
+  setHead('신규 고객','해외영업');
+  const mode=state.plMode||'기존', y=new Date(), pad=n=>String(n).padStart(2,'0');
+  const docno='BL-PL-'+y.getFullYear()+pad(y.getMonth()+1)+pad(y.getDate());
+  const newCustomers=[
+    {name:'MedGulf Trading', country:'사우디', src:'발굴 센터 이관', date:'06/13', sent:false},
+    {name:'AndesMed', country:'칠레', src:'발굴 센터 이관', date:'06/11', sent:true},
+  ];
+  const body = mode==='기존'
+    ? `<table><thead><tr><th>Code</th><th>Size</th><th class="num">Factory (USD)</th><th class="num">40ft 컨테이너가</th></tr></thead><tbody>${nealCatalog.map(g=>`<tr class="grouphdr"><td colspan="4"><b>${g.grp}</b> <span class="muted" style="font-weight:400">· MOQ ${g.moq}</span></td></tr>${g.items.map(it=>`<tr><td>${it[0]}</td><td>${it[1]}</td><td class="num">$${it[2].toFixed(2)}</td><td class="num">$${it[3].toFixed(2)}</td></tr>`).join('')}`).join('')}</tbody></table>`
+    : `<table><thead><tr><th>Item</th><th>Spec</th><th>Unit</th><th class="num">Unit Price (USD)</th></tr></thead><tbody>${[0,1,2,3,4,5].map(()=>`<tr>${[0,1,2,3].map(i=>`<td class="${i===3?'num':''}"><input style="border:none;border-bottom:1px dashed #bbb;width:${i===0?'150px':i===3?'90px':'70px'};font-family:inherit;font-size:12.5px;${i===3?'text-align:right':''}" placeholder="${['품명','규격','단위','단가'][i]}"></td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  return `
+  <div class="pagehead"><div><div class="t">신규 고객</div><div class="d">발굴 센터에서 이관된 신규 고객 관리와 Price List 발송(아웃룩). OEM/ODM 신규 코드는 빈 양식에 수기 입력합니다.</div></div></div>
+  <div class="seclabel">신규 고객 (발굴 센터 등록)</div>
+  <div class="card ov" style="margin-bottom:18px"><table>
+    <thead><tr><th>고객</th><th>국가</th><th>등록 경로</th><th>등록일</th><th>Price List</th></tr></thead>
+    <tbody>${newCustomers.map(c=>`<tr><td><b>${c.name}</b></td><td>${c.country}</td><td><span class="badge muted">${c.src}</span></td><td class="muted">${c.date}</td><td>${c.sent?'<span class="badge ok">발송완료</span>':'<span class="badge warn">미발송</span>'}</td></tr>`).join('')}</tbody>
+  </table></div>
+  <div class="card" style="margin-bottom:16px"><div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <div style="display:flex;gap:6px">
+      <button class="btn" style="${mode==='기존'?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setPlMode('기존')">2026 NEAL 카탈로그</button>
+      <button class="btn" style="${mode==='신규'?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setPlMode('신규')">OEM/ODM 신규 (빈 양식)</button>
+    </div>
+    <div style="flex:1"></div>
+    <input class="search" id="plEmail" style="min-width:220px" placeholder="받는 사람 이메일 (Outlook)">
+    <button class="btn primary" onclick="ovSend('plEmail','Price List')">Outlook으로 발송</button>
+  </div></div>
+  <div class="doc" style="max-width:760px">
+    <div style="text-align:center"><b style="font-size:19px">BL TECH Co., Ltd.</b></div>
+    <div class="muted" style="text-align:center;font-size:11px;margin-bottom:14px">84, Toegyenonggong-ro, Chuncheon-si, Gangwon-do, KOREA · T +82-33-264-2686 · F +82-31-629-5216</div>
+    <h2 style="letter-spacing:.22em;padding-left:.22em">2026 PRICE LIST</h2>
+    <div class="meta"><div>To : <input value="${mode==='기존'?'New Customer':''}" style="border:none;border-bottom:1px solid #9aa;font-size:13px;width:200px;font-family:inherit;background:#FAFBFC;padding:2px"></div><div style="text-align:right">No. : ${docno}<br>Date : ${y.getFullYear()}-${pad(y.getMonth()+1)}-${pad(y.getDate())}</div></div>
+    <div class="intro">All prices in USD (FOB Busan). Factory Price / 40ft container (big-order) price. Payment: T/T 30% deposit / 70% after B/L. MOQ as noted. Validity 30 days.</div>
+    ${body}
+    <div class="reply">※ OEM/ODM 신규 코드는 빈칸으로 두고 수기 입력하며, 첫 등록 시 내부 품명과 매핑됩니다. HS Code·Incoterms·Bank·Signature는 PI 단계에서 포함됩니다.</div>
+  </div>`;
+}
+
+function setSelPO(i){ state.ovSelPO=i; state.ovPreview=null; render(); }
+function togglePreview(name){ state.ovPreview = (state.ovPreview===name?null:name); render(); }
+function attPreview(name, sel){
+  return `<div style="font-size:12px;color:var(--ink-2);margin-bottom:8px">${name} · 자동 인식 결과</div>
+   <div class="ov" style="border:1px solid var(--border);border-radius:6px"><table style="margin:0"><thead><tr><th>발주 코드</th><th class="num">수량</th><th>색상(끝자리)</th></tr></thead>
+   <tbody>${sel.pi.lines.map(l=>`<tr><td>${l[0].split(' → ')[0]}</td><td class="num">${fmt(l[2])}</td><td>${l[3]==='?'?'<span class="badge warn">확인</span>':l[3]}</td></tr>`).join('')}</tbody></table></div>
+   <div class="muted" style="font-size:11px;margin-top:8px">실제 구현 시 PDF·엑셀 원본이 이 영역에 그대로 렌더링됩니다.</div>`;
+}
+function vOvOrders(){
+  setHead('수주 · 생산','해외영업');
+  const idx=state.ovSelPO||0; const sel=ovPOInbox[idx]||ovPOInbox[0];
+  const steps=[['1','PO 수령','Outlook 수신'],['2','PI 발행','자동 인식'],['3','생산출고의뢰서','자동 인식'],['4','선적','포워더 메일'],['5','수출서류','PI·CI·PL·C/O'],['6','정산','PI별 입금']];
+  return `
+  <div class="pagehead"><div><div class="t">수주 · 생산</div><div class="d">메일 원문·첨부를 이 화면에서 바로 확인하고, 오른쪽에서 PI를 자동 생성합니다. (메일함을 따로 오갈 필요 없음)</div></div></div>
+  <div class="row" style="margin-bottom:18px">${steps.map(s=>`<div class="step"><div class="n">STEP ${s[0]}</div><div class="h">${s[1]}</div><div class="muted" style="font-size:11.5px;margin-top:2px">${s[2]}</div></div>`).join('')}</div>
+  <div class="seclabel">PO 수신함 (Outlook)</div>
+  <div class="card ov" style="margin-bottom:16px"><table>
+    <thead><tr><th>발신</th><th>제목</th><th>첨부</th><th>수신일</th><th>코드 매칭</th></tr></thead>
+    <tbody>${ovPOInbox.map((p,i)=>`<tr class="clickable" style="${i===idx?'background:var(--teal-soft)':''}" onclick="setSelPO(${i})"><td><b>${p.from}</b><div class="muted" style="font-size:11px">${p.mail}</div></td><td>${p.subj}</td><td class="num">${p.atts.length}개</td><td class="muted">${p.date}</td><td>${p.matched?'<span class="badge ok">매칭 완료</span>':'<span class="badge danger">미매칭 있음</span>'}</td></tr>`).join('')}</tbody>
+  </table></div>
+  <div class="row">
+    <div class="card" style="flex:1.2;min-width:330px"><div class="pad">
+      <div class="seclabel">메일 원문</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${sel.subj}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">From ${sel.from} &lt;${sel.mail}&gt; · ${sel.date}</div>
+      <div style="white-space:pre-wrap;font-size:12.5px;line-height:1.65;border:1px solid var(--border);border-radius:8px;padding:13px;background:#fff">${sel.body}</div>
+      <div style="margin-top:12px"><div class="muted" style="font-size:12px;margin-bottom:6px">첨부파일 (클릭하면 아래에 미리보기)</div>
+        ${sel.atts.map(a=>`<button class="btn sm" style="${state.ovPreview===a.name?'border-color:var(--teal);color:var(--teal-d)':''}" onclick="togglePreview('${a.name}')">📎 ${a.name}</button>`).join(' ')}
+      </div>
+      ${state.ovPreview?`<div style="margin-top:12px;border:1px solid var(--teal);border-radius:8px;overflow:hidden">
+        <div style="background:var(--teal-soft);color:var(--teal-d);font-size:12px;font-weight:600;padding:7px 11px">미리보기 · ${state.ovPreview}</div>
+        <div style="padding:12px">${attPreview(state.ovPreview, sel)}</div></div>`:''}
+    </div></div>
+    <div class="card" style="flex:1;min-width:300px"><div class="pad">
+      <div class="seclabel">PI 자동 생성</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;margin-bottom:8px"><div><b>${sel.pi.no}</b> · ${sel.pi.inco} · ${sel.pi.cur}</div><div>${sel.matched?'<span class="badge ok">자동 인식 완료</span>':'<span class="badge danger">미매칭 있음</span>'}</div></div>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+        <thead><tr><th>코드 (매핑)</th><th>품명</th><th class="num">수량</th><th>색상</th></tr></thead>
+        <tbody>${sel.pi.lines.map(l=>`<tr><td style="font-size:11.5px">${l[0]}</td><td>${l[1]}</td><td class="num">${fmt(l[2])}</td><td>${l[3]==='?'?'<span class="badge warn">확인</span>':l[3]}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <div class="quick" style="margin-top:12px">
+        ${sel.matched?'':`<button class="btn" onclick="toast('미매칭 코드 등록 (이후 자동 매칭)')">미매칭 코드 등록</button>`}
+        <button class="btn primary" onclick="toast('${sel.pi.no} PI 발행 → 생산출고의뢰서 생성')">PI 발행 · 생산출고의뢰서</button>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:10px">발주코드↔내부 품명 매핑은 첫 등록만 Price List(신규 고객)에서 수기 입력하고, 이후 PO→PI 단계에서 동일하게 자동 인식됩니다.</div>
+    </div></div>
+  </div>`;
+}
+
+function vOvAgencies(){
+  setHead('거래처 관리','해외영업 · '+ovField());
+  const f=ovField(), list=ovAgencies.filter(a=>a.field===f);
+  const active=ovOrders.filter(o=>o.field===f && o.stage!=='정산');
+  const byAgency={}; active.forEach(o=>{(byAgency[o.agency]=byAgency[o.agency]||[]).push(o);});
+  const projAgencies=Object.keys(byAgency);
+  const unpaid=ovOrders.filter(o=>o.field===f && (!o.dep||!o.bal));
+  return `
+  ${ovFieldTabs()}
+  <div class="pagehead"><div><div class="t">거래처 관리</div><div class="d">${f} · 거래처 정보와 진행 프로젝트, 선금/잔금 현황을 한 화면에서 봅니다.</div></div></div>
+  <div class="seclabel">진행 중인 프로젝트 (거래처별)</div>
+  <div class="row" style="margin-bottom:22px">${projAgencies.length?projAgencies.map(name=>{const ors=byAgency[name]; const a=ovAgencies.find(x=>x.name===name)||{}; return `
+    <div style="flex:1;min-width:240px;border:1.5px solid var(--teal);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)">
+      <div style="padding:10px 13px;background:var(--teal);color:#fff;font-weight:700;font-size:13px">${name} <span style="font-weight:400;opacity:.85">· ${a.country||''}</span></div>
+      <div style="padding:8px 13px;background:#fff">${ors.map(o=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)"><div><b style="font-size:12.5px">${o.pi}</b> <span class="muted" style="font-size:11px">ETD ${o.etd}</span><div class="muted" style="font-size:11px">${ovMoney(o.amount,o.cur)}</div></div><span class="badge info">${o.stage}</span></div>`).join('')}</div>
+    </div>`;}).join(''):'<div class="muted">진행 중인 프로젝트가 없습니다.</div>'}</div>
+  <div class="row">
+    <div class="card" style="flex:1.6;min-width:340px"><div class="pad">
+      <div class="seclabel">거래처 리스트</div>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+        <thead><tr><th>거래처</th><th>국가</th><th>인코텀즈</th><th>결제</th><th>통화</th><th>진행 PI</th></tr></thead>
+        <tbody>${list.length?list.map(a=>{const ors=ovOrders.filter(o=>o.agency===a.name); return `<tr class="clickable" onclick="ovStatement('${a.id}')"><td><b>${a.name}</b></td><td>${a.country}</td><td><span class="badge muted">${a.inco}</span></td><td>${a.pay}</td><td>${a.cur}</td><td>${ors.length}건</td></tr>`;}).join(''):'<tr><td colspan="6" class="muted" style="padding:14px;text-align:center">해당 분야 거래처 없음</td></tr>'}</tbody>
+      </table></div>
+      <div class="muted" style="font-size:12px;margin-top:8px">행을 클릭하면 거래처별 PI 정산(선금/잔금) 현황이 열립니다.</div>
+    </div></div>
+    <div class="card" style="flex:1;min-width:260px"><div class="pad">
+      <div class="seclabel">선금 / 잔금 현황</div>
+      <div class="ledger-list">${unpaid.length?unpaid.map(o=>`<div class="li"><span class="dotmark" style="background:var(--${!o.dep?'danger':'warn'})"></span><div class="ti"><div style="font-size:13px;font-weight:600">${o.agency} · ${o.pi}</div><div class="muted" style="font-size:12px">${!o.dep?'선금 미입금':'잔금 미입금'} · ${ovMoney(o.amount,o.cur)}</div></div></div>`).join(''):'<div class="muted" style="font-size:12.5px">미입금 건 없음</div>'}</div>
+    </div></div>
+  </div>`;
+}
+function ovStatement(id){
+  const a=ovAgencies.find(x=>x.id===id); if(!a) return;
+  const ors=ovOrders.filter(o=>o.agency===a.name);
+  openModal(`<div class="mh"><b>${a.name} · 정산 현황</b><button class="x" onclick="closeModal()">×</button></div>
+    <div class="mb">
+      <div class="muted" style="font-size:12.5px;margin-bottom:12px">${a.country} · ${a.inco} · ${a.pay} · ${a.cur}</div>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+        <thead><tr><th>PI No.</th><th class="num">금액</th><th>선금 30%</th><th>잔금 70%</th><th>단계</th></tr></thead>
+        <tbody>${ors.length?ors.map(o=>`<tr><td><b>${o.pi}</b></td><td class="num">${ovMoney(o.amount,o.cur)}</td><td>${payBadge(o.dep)}</td><td>${payBadge(o.bal)}</td><td class="muted">${o.stage}</td></tr>`).join(''):'<tr><td colspan="5" class="muted" style="padding:12px;text-align:center">진행 PI 없음</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="mf"><button class="btn" onclick="closeModal()">닫기</button></div>`);
+}
+
+function setShipAgency(id){ state.shipAgency=id; render(); }
+function vOvShipping(){
+  setHead('선적 · 물류','해외영업');
+  const aid=state.shipAgency||'o1'; const a=ovAgencies.find(x=>x.id===aid)||ovAgencies[0];
+  const routeStages=['공장 출고','수출통관','POL 선적','주(主)운송','POD 양하','수입통관','도착지 인도'];
+  const incoResp={'EXW':{upto:0,note:'공장 인도 — 이후 전 과정 매수인 수배'},'FOB':{upto:2,note:'지정 선적항 본선 적재까지 매도인'},'CIF':{upto:4,note:'도착항까지 운임·보험 매도인 부담(위험은 본선 적재 시 이전)'},'DAP':{upto:6,ex:[5],note:'도착지 인도까지 매도인 · 수입통관/관세는 매수인'},'DDP':{upto:6,note:'수입통관·관세까지 전 과정 매도인'}};
+  const ir=incoResp[a.inco]||incoResp['FOB'];
+  const caseKey=a.fwd.indexOf('고객사')>=0?'fob-customer':(a.fwd.indexOf('항공')>=0?'dap-air':'fob-korea');
+  const cases={
+    'fob-customer':{label:'FOB · 고객사 포워더 컨택요청', to:'rakesh@surgicals.in', subj:'Cargo Ready Notice',
+      body:`Hello,\n\nThe products will be ready on June 18th.\n\n10 pallets\n110*110*195cm  6 pallets\n110*110*215cm  1 pallet\n(외 3 pallets)\nTotal: 4,944.20 kg\n\nPlease contact your forwarder and arrange the vessel.\n\nThank you.\nBL TECH Overseas Sales`},
+    'fob-korea':{label:'FOB/EXW · 지정 한국 포워더 스케줄 요청', to:'choi@ocean-fwd.co.kr', subj:'ECD 해상 FCL 스케줄 문의',
+      body:`안녕하세요 책임님,\n비엘테크 해외영업팀입니다.\n\nECD 해상 FCL 스케줄 문의드립니다.\n\nEXW / NY PORT\nFCL 20FT x 1\n3,221.30 KG\nCARGO READY : 06/18 (목) — 하루 이틀 조정 가능\n\n가능한 타겟 스케줄 먼저 공유 부탁드립니다.\n감사합니다.`},
+    'dap-air':{label:'DAP · 항공 지정 포워더 스케줄+운임', to:'song@air-fwd.co.kr', subj:'항공 DAP 스케줄·운임 문의',
+      body:`안녕하세요 부장님,\n비엘테크 해외영업팀입니다.\n\n항공 DAP 스케줄 및 운임 문의드립니다 (주말 도착 제외).\n\n1 pallet / 110*110*159cm / 471.04 kg\n출고 가능일 : 04/13 (월)\n\n[고객사 주소]\nYOVANN'S CO. 19 RUE VERTE 76000 ROUEN - FRANCE\n\n스케줄과 운임 함께 회신 부탁드립니다.\n감사합니다.`},
+  };
+  const cur=cases[caseKey];
+  return `
+  <div class="pagehead"><div><div class="t">선적 · 물류</div><div class="d">거래처를 선택하면 인코텀즈와 포워더 운영 방식, 우리가 책임지는 구간이 바로 표시됩니다.</div></div></div>
+  <div class="card" style="margin-bottom:16px"><div class="pad">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <span class="muted" style="font-size:12px">거래처</span>
+      <select class="search" style="width:auto" onchange="setShipAgency(this.value)">${ovAgencies.map(x=>`<option value="${x.id}" ${x.id===aid?'selected':''}>${x.name} · ${x.country}</option>`).join('')}</select>
+      <span class="badge teal">인코텀즈 ${a.inco}</span><span class="badge muted">결제 ${a.pay}</span><span class="badge muted">${a.cur}</span>
+    </div>
+    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:3px">인코텀즈 ${a.inco} — 우리(매도인) 책임 구간</div>
+      <div class="muted" style="font-size:12px;margin-bottom:12px">${ir.note} · 포워더 운영: ${a.fwd}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        ${routeStages.map((s,i)=>{const own=i<=ir.upto && !((ir.ex||[]).includes(i)); return `<div style="padding:9px 9px;border-radius:7px;font-size:11.5px;font-weight:600;${own?'background:var(--teal);color:#fff':'background:#fff;color:var(--ink-3);border:1px solid var(--border)'}">${s}</div>${i<routeStages.length-1?'<span style="color:var(--ink-3)">›</span>':''}`;}).join('')}
+      </div>
+      <div style="display:flex;gap:16px;margin-top:11px;font-size:11.5px"><span><span style="display:inline-block;width:11px;height:11px;background:var(--teal);border-radius:3px;vertical-align:middle"></span> 매도인(우리) 책임</span><span><span style="display:inline-block;width:11px;height:11px;background:#fff;border:1px solid var(--border);border-radius:3px;vertical-align:middle"></span> 매수인 책임</span></div>
+    </div>
+    <div class="quick" style="margin-top:14px">
+      <button class="btn primary" onclick="toast('Packing List 생성 (PI 데이터 자동 반영)')">PL 생성</button>
+      <button class="btn" onclick="toast('C/O(원산지증명) 발급 요청 — 상공회의소')">C/O 요청</button>
+    </div>
+  </div></div>
+  <div class="seclabel">포워더 요청 (서브) · ${cur.label}</div>
+  <div class="card"><div class="pad">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="flex:1;min-width:160px"><label class="muted" style="font-size:12px">받는 사람</label><input class="search" id="shipTo" value="${cur.to}" style="width:100%;margin-top:4px"></div>
+      <div style="flex:2;min-width:220px"><label class="muted" style="font-size:12px">제목</label><input class="search" id="shipSubj" value="${cur.subj}" style="width:100%;margin-top:4px"></div>
+    </div>
+    <textarea id="shipBody" style="width:100%;min-height:230px;font-family:inherit;font-size:12.5px;line-height:1.6;border:1px solid var(--border-2);border-radius:8px;padding:12px;resize:vertical;box-sizing:border-box">${cur.body}</textarea>
+    <div class="quick" style="margin-top:12px"><button class="btn" onclick="toast('PI · Packing List 자동 첨부 (프로토타입)')">서류 첨부</button><button class="btn primary" onclick="ovSend('shipTo','포워더 메일')">Outlook으로 발송</button></div>
+  </div></div>`;
+}
+
+function vOvDocs(){
+  setHead('수출서류','해외영업');
+  const gen=['PI (Proforma Invoice)','CI (Commercial Invoice)','Packing List','C/O (원산지증명)'];
+  const up=['B/L (선하증권)','수출신고필증','보험증권','CFS (자유판매증명)'];
+  return `
+  <div class="pagehead"><div><div class="t">수출서류</div><div class="d">PI·CI·Packing List·C/O는 포털에서 생성하고, B/L·수출신고필증·보험증권·CFS는 업로드 보관합니다.</div></div></div>
+  <div class="row">
+    <div class="card" style="flex:1;min-width:300px"><div class="pad">
+      <div class="seclabel">포털 생성 서류</div>
+      ${gen.map(g=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border)"><div style="font-size:13px;font-weight:600">${g}</div><button class="btn sm primary" onclick="toast('${g} 생성 (PI 데이터 자동 반영)')">생성</button></div>`).join('')}
+      <div class="muted" style="font-size:12px;margin-top:10px">PI 항목(HS코드·인코텀즈·통화·은행정보·서명)이 각 서류에 자동 반영됩니다.</div>
+    </div></div>
+    <div class="card" style="flex:1;min-width:300px"><div class="pad">
+      <div class="seclabel">업로드 보관 (외부 발행)</div>
+      ${up.map(u=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border)"><div style="font-size:13px;font-weight:600">${u}</div><label class="btn sm" style="cursor:pointer"><input type="file" accept=".pdf,.xls,.xlsx,image/*" style="display:none" onchange="poUpload(this)">업로드</label></div>`).join('')}
+      <div id="poFiles" style="margin-top:10px"></div>
+      <div class="muted" style="font-size:12px;margin-top:10px">포워더·관세사 등 외부 발행 서류는 PDF·엑셀·사진으로 업로드해 PI별로 보관합니다.</div>
+    </div></div>
+  </div>`;
+}
+
+function render(){
+  const c=document.getElementById('content');
+  const map={ 'dom-dash':vDomDash,'dom-agencies':vAgencies,'dom-pipeline':vPipeline,'agency':vAgencyDetail,
+    'dom-shipping':vShipping,'dom-returns':vReturns,'dom-return-new':vReturnNew,'dom-ledger':vLedger,'dom-followup':vFollowup,'cert-hub':vCertHub,'quote':vQuote,
+    'ov-dash':vOvDash,'ov-pricelist':vOvPricelist,'ov-orders':vOvOrders,'ov-agencies':vOvAgencies,'ov-shipping':vOvShipping,'ov-docs':vOvDocs,
+    'disc-dash':vDiscDash,'disc-leads':vDiscLeads,'disc-market':vMarket,'disc-search':vSearch,'lead':vLeadDetail,'proposal':vProposal,'doc':vDoc };
+  c.innerHTML=(map[state.view]||vDomDash)();
+  c.scrollTop=0;
+  const ch=document.getElementById('mktChat'); if(ch) ch.scrollTop=ch.scrollHeight;
+  // active nav
+  document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active', a.dataset.view===state.view));
+}
+function go(v){ state.view=v; render(); }
+
+/* ---------------- events ---------------- */
+document.getElementById('nav').addEventListener('click',e=>{ const a=e.target.closest('a'); if(a){ go(a.dataset.view);} });
+document.getElementById('content').addEventListener('click',e=>{
+  const nav=e.target.closest('[data-view]'); if(nav){ go(nav.dataset.view); return; }
+  const back=e.target.closest('[data-back]'); if(back){ go(back.dataset.back==='agency'?'agency':'dom-agencies'); return; }
+  const doc=e.target.closest('[data-doc]'); if(doc){ state.docAgency=doc.dataset.doc; go('doc'); return; }
+  const tab=e.target.closest('[data-tab]'); if(tab){ state.aTab=tab.dataset.tab; render(); return; }
+  const stab=e.target.closest('[data-shiptab]'); if(stab){ state.shipTab=stab.dataset.shiptab; render(); return; }
+  const arow=e.target.closest('[data-agency]'); if(arow){ state.agency=arow.dataset.agency; state.aTab='개요'; go('agency'); return; }
+  const lrow=e.target.closest('[data-lead]'); if(lrow){ state.lead=lrow.dataset.lead; go('lead'); return; }
+  if(e.target.id==='checkAll'){ const on=e.target.checked; curAgencies().forEach(a=>on?state.checked.add(a.id):state.checked.delete(a.id)); render(); return; }
+  if(e.target.classList.contains('rowchk')){ const id=e.target.dataset.id; e.target.checked?state.checked.add(id):state.checked.delete(id); render(); return; }
+  if(e.target.id==='bulkBtn'){ bulkModal(); return; }
+  if(e.target.id==='histBtn'){ histModal(); return; }
+  if(e.target.id==='exportBtn'){ toast('대리점 목록 엑셀 다운로드 (프로토타입)'); return; }
+  if(e.target.id==='convertBtn'){ toast('국내영업 대리점으로 이관되었습니다'); setTimeout(()=>go('dom-agencies'),700); return; }
+  if(e.target.id==='ovConvertBtn'){ toast('해외 신규 고객으로 등록되었습니다'); setTimeout(()=>go('ov-pricelist'),700); return; }
+});
+document.getElementById('modal').addEventListener('click',e=>{
+  const doc=e.target.closest('[data-doc]'); if(doc){ state.docAgency=doc.dataset.doc; go('doc'); }
+  if(e.target.id==='bulkSend'){ const n=state.checked.size; closeModal(); toast(n+'곳에 채권채무조회서를 발송했습니다'); }
+});
+document.getElementById('modalBg').addEventListener('click',e=>{ if(e.target.id==='modalBg') closeModal(); });
+// mobile menu
+const mq=window.matchMedia('(max-width:820px)');
+function syncMenu(){ document.getElementById('menuBtn').style.display=mq.matches?'flex':'none'; }
+mq.addEventListener('change',syncMenu); syncMenu();
+document.getElementById('menuBtn').addEventListener('click',()=>document.getElementById('side').classList.toggle('open'));
+
+render();

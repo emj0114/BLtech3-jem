@@ -80,7 +80,7 @@ const regionMap = {
   '독일': ['바이에른','노르트라인','베를린','함부르크'],
   '중국': ['화북','화동','화남','서부'],
 };
-function regionsOf(c){ return ['전체'].concat(regionMap[c]||[]); }
+function regionsOf(c){ if(c==='전 세계 (미정)') return ['전체']; return ['전체'].concat(regionMap[c]||[]); }
 const marketPool = {
   '대한민국':[
     {name:'서울 메디플러스', region:'서울', size:'중견', lic:true,  items:'캐스트·하이드로겔', fit:88},
@@ -103,13 +103,15 @@ const marketPool = {
     {name:'EU Cast Partners', region:'바이에른', size:'중견', lic:true, items:'하이드로겔', fit:75},
   ],
 };
-function mktList(){ const m=state.market; let l=(marketPool[m.country]||[]).slice();
+function mktList(){ const m=state.market; let l;
+  if(m.country==='전 세계 (미정)' || !marketPool[m.country]){ l=[]; Object.keys(marketPool).forEach(c=>marketPool[c].forEach(x=>l.push(Object.assign({country:c},x)))); }
+  else l=marketPool[m.country].map(x=>Object.assign({country:m.country},x));
   if(m.region && m.region!=='전체') l=l.filter(x=>x.region===m.region);
   if(m.filters.includes('mid')) l=l.filter(x=>x.size==='중견'||x.size==='대기업');
   if(m.filters.includes('lic')) l=l.filter(x=>x.lic);
   if(m.filters.includes('cast')) l=l.filter(x=>/캐스트/.test(x.items));
   return l; }
-function mktCountry(c){ const m=state.market; m.country=c; m.region='전체'; m.searched=false; m.filters=[]; m.chat=[]; render(); }
+function mktCountry(c){ const m=state.market; m.country=c; m.region='전체'; m.searched=true; m.filters=[]; m.chat.push({r:'ai',t:`${c==='전 세계 (미정)'?'전 세계(국가 미정)':c} 기준으로 다시 탐색했어요 — 후보 ${mktList().length}곳. 지역·규모·라이선스·취급 품목으로 좁혀볼까요?`}); render(); }
 function mktRegion(r){ state.market.region=r; render(); }
 function mktSearch(){ const m=state.market; m.searched=true; if(m.chat.length===0){ m.chat.push({r:'ai',t:`${m.region==='전체'?m.country+' 전체 지역':m.country+' · '+m.region}에서 STP 조건에 맞는 후보를 ${mktList().length}곳 찾았어요. 더 좁히고 싶은 기준을 말씀해 주세요 — 예: 매출 규모, 판매 라이선스 보유, 취급 품목.`}); } render(); setTimeout(()=>{const e=document.getElementById('mktResults'); if(e) e.scrollIntoView({behavior:'smooth',block:'start'});},80); }
 function mktAsk(key,label){ const m=state.market; if(!m.filters.includes(key)) m.filters.push(key); m.chat.push({r:'me',t:label}); m.chat.push({r:'ai',t:`${label} 조건을 반영했어요. 현재 후보 ${mktList().length}곳입니다.`}); render(); }
@@ -121,8 +123,11 @@ function mktSend(){ const inp=document.getElementById('mktInput'); const v=(inp&
   m.chat.push({r:'ai',t: ap.length?`${ap.join(', ')} 조건을 반영했어요. 현재 후보 ${mktList().length}곳입니다.`:`현재 후보 ${mktList().length}곳입니다. 매출 규모·판매 라이선스·취급 품목으로 더 좁힐 수 있어요.`}); render(); }
 
 /* ---------------- state ---------------- */
-let state = { view:'dom-dash', domField:'메디컬', ovField:'메디컬', fxRange:'1M', shipCase:'fob-customer', shipAgency:'o1', ovSelPO:0, ovPreview:null, plMode:'기존', agency:null, aTab:'개요', lead:null, checked:new Set(), docAgency:null, shipTab:'메디컬', ledgerChk:new Set(), narrowed:false,
-  market:{ country:'대한민국', region:'전체', searched:false, filters:[], chat:[] },
+let state = { view:'dom-dash', tabs:[{id:'dom-dash',view:'dom-dash',label:'대시보드',ctx:null}], activeTab:'dom-dash', clientSel:undefined, clientNew:false, clientOcr:null,
+  journal:[], userAlerts:[], recvTab:'미수 현황', shipMode:'의뢰', shipChk:new Set(), shipFilter:'전체', returnChk:new Set(), ledgerStatus:{}, shipStatus:{},
+  recvFollowups:[ {agency:'한백', note:'30일 초과 — 채권채무조회 대상', status:'미회수'}, {agency:'대성 메디칼', note:'D-9 갱신 협의 통화 예정', status:'미회수'}, {agency:'부산 정형', note:'정기 접촉 미접촉 21일', status:'미회수'} ],
+  domField:'메디컬', ovField:'메디컬', fxRange:'1M', shipCase:'fob-customer', shipAgency:'o1', ovSelPO:0, ovPreview:null, plMode:'기존', agency:null, aTab:'개요', lead:null, checked:new Set(), docAgency:null, shipTab:'메디컬', ledgerChk:new Set(), narrowed:false,
+  market:{ country:'전 세계 (미정)', region:'전체', searched:true, filters:[], chat:[] },
   suga:{ brand:'NEAL', grade:'A', premold:true, cover:true } };
 
 /* ---------------- helpers ---------------- */
@@ -189,7 +194,6 @@ function sugaTableHTML(){
   return `<div class="card">
     <div style="display:flex;align-items:center;border-bottom:1px solid var(--border)">
       <div class="tabs" style="flex:1;border-bottom:none">${['NEAL','SMILE'].map(b=>`<button class="${b===st.brand?'active':''}" onclick="sugaSet('brand','${b}')">${b}</button>`).join('')}</div>
-      <button class="btn primary sm" style="margin:0 12px" data-view="quote">견적서 발송</button>
     </div>
     <div class="pad">
       <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:13px">
@@ -197,11 +201,62 @@ function sugaTableHTML(){
         ${sugaGrades.map(g=>`<button class="btn sm" style="${g===st.grade?'background:var(--teal);border-color:var(--teal);color:#fff':''}" onclick="sugaSet('grade','${g}')">${g}</button>`).join('')}
         <span class="muted" style="font-size:12px;margin-left:6px">단가 적용률 ${sugaRate[st.grade]} · 좌측 체크로 견적서 포함</span>
       </div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
         <thead><tr><th style="width:34px"></th><th>품목</th><th class="num">단가 (${st.grade})</th><th class="num">보험수가</th></tr></thead>
         <tbody>${groups}</tbody>
       </table></div>
     </div>
+  </div>`;
+}
+
+function vHome(){
+  setHead('홈','BL TECH 영업 포털 · 시작하기');
+  const steps=[
+    ['01','고객 발굴','거래처 후보를 찾아 검증'],
+    ['02','영업 진행','국내·해외 주문·출고 관리'],
+    ['03','인증·사후관리','진입 요건·문서·미수금'],
+  ];
+  const areas=[
+    { bg:'--info-soft', fg:'--info', title:'고객 발굴 센터', badge:'1단계', badgeC:'info',
+      icon:'<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+      desc:'새로 거래할 만한 곳을 찾아 검증하고, 영업팀으로 넘기는 단계예요.',
+      links:'<button class="btn sm" data-view="disc-dash">발굴 동선</button><button class="btn sm" data-view="disc-leads">잠재 거래처</button>' },
+    { bg:'--teal-soft', fg:'--teal-d', title:'국내영업', badge:'추천 시작점', badgeC:'teal',
+      icon:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+      desc:'국내 대리점의 주문·출고·미수금·반품을 한 곳에서 관리해요.',
+      links:'<button class="btn primary sm" data-view="dom-dash">대시보드 열기</button><button class="btn sm" data-view="dom-agencies">미수금 관리</button><button class="btn sm" data-view="dom-clients">거래처 등록</button>' },
+    { bg:'--ok-soft', fg:'--ok', title:'해외영업',
+      icon:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
+      desc:'수출 거래처의 수주·생산·선적·수출서류를 관리해요.',
+      links:'<button class="btn sm" data-view="ov-dash">대시보드</button><button class="btn sm" data-view="ov-orders">수주·생산</button>' },
+    { bg:'--warn-soft', fg:'--warn', title:'인증·규제 허브', badge:'공통', badgeC:'muted',
+      icon:'<path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/>',
+      desc:'제품 인증서와 규제 진입 요건을 모아보는 공통 자료실이에요.',
+      links:'<button class="btn sm" data-view="cert-hub">허브 열기</button>' },
+  ];
+  return `
+  <div class="pagehead"><div><div class="t">환영합니다 👋</div><div class="d">BL TECH 영업 포털이에요. 아래에서 업무 영역을 고르면 바로 시작할 수 있어요. 왼쪽 메뉴로 언제든 이동할 수 있습니다.</div></div></div>
+  <div class="seclabel">이렇게 사용해요</div>
+  <div class="flow" style="margin-bottom:26px">
+    ${steps.map(s=>`<div class="step"><div class="n">${s[0]}</div><div class="h">${s[1]}</div><div class="s">${s[2]}</div></div>`).join('')}
+  </div>
+  <div class="seclabel">업무 영역</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:16px">
+    ${areas.map(a=>`<div class="card"><div class="pad">
+      <div style="display:flex;align-items:center;gap:11px;margin-bottom:11px">
+        <div style="width:40px;height:40px;border-radius:11px;background:var(${a.bg});color:var(${a.fg});display:flex;align-items:center;justify-content:center;flex:0 0 40px">
+          <svg width="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${a.icon}</svg>
+        </div>
+        <div style="flex:1;font-size:15.5px;font-weight:700">${a.title}</div>
+        ${a.badge?`<span class="badge ${a.badgeC}">${a.badge}</span>`:''}
+      </div>
+      <div style="color:var(--ink-2);font-size:13px;line-height:1.65;min-height:42px">${a.desc}</div>
+      <div class="quick" style="margin-top:13px">${a.links}</div>
+    </div></div>`).join('')}
+  </div>
+  <div class="muted" style="font-size:12.5px;margin-top:22px;display:flex;align-items:flex-start;gap:7px;line-height:1.6">
+    <svg width="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:0 0 15px;margin-top:2px"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+    <span>처음이시면 <b style="font-weight:600;color:var(--ink-2)">국내영업 → 대시보드</b>부터 살펴보시길 추천해요. 좌측 상단 로고를 누르면 언제든 이 홈으로 돌아옵니다.</span>
   </div>`;
 }
 
@@ -212,47 +267,30 @@ function vDomDash(){
   const totalSales=ags.reduce((s,a)=>s+a.sales,0);
   const recvCount=ags.filter(a=>a.recv>0).length;
   const meta=fieldMeta[state.domField];
-  const recvList=ags.filter(a=>a.recv>0).sort((x,y)=>new Date(x.pay)-new Date(y.pay));
-  const alerts=alertsByField[state.domField];
+  const alerts=[...state.userAlerts, ...alertsByField[state.domField]];
+  const stages=['제안','견적','협상','계약','납품'];
+  const pipeline=pipelineByField[state.domField];
+  const shipPend=medOrders.filter(o=>o.kind==='주문'&&!o.shipped).length;
   return `
   ${fieldTabs()}
   <div class="kpis" style="margin-bottom:20px">
     <div class="kpi"><div class="lab">당월 매출</div><div class="val">${won(totalSales)}</div><div class="sub">${state.domField} 분야</div></div>
-    <div class="kpi"><div class="lab">미수금 총액</div><div class="val warn">${won(totalRecv)}</div><div class="sub">${ags.length}개 거래처 중 ${recvCount}곳</div></div>
-    <div class="kpi"><div class="lab">진행 주문</div><div class="val">${meta.orders}건</div></div>
-    <div class="kpi"><div class="lab">미처리 클레임</div><div class="val ${meta.claims?'danger':''}">${meta.claims}건</div></div>
+    <div class="kpi" data-view="dom-agencies" style="cursor:pointer"><div class="lab">미수금 총액</div><div class="val warn">${won(totalRecv)}</div><div class="sub">${recvCount}곳 · 미수금 관리 →</div></div>
+    <div class="kpi" data-view="dom-shipping" style="cursor:pointer"><div class="lab">출고 대기</div><div class="val">${shipPend}건</div><div class="sub">출고 현황 →</div></div>
   </div>
-  <div class="row">
-    <div class="card" style="flex:1.3;min-width:320px"><div class="pad">
-      <div class="seclabel">미수금 현황</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
-        <thead><tr><th>업체</th><th class="num">미수금</th><th>마지막 입금일</th><th>경과</th></tr></thead>
-        <tbody>${recvList.length?recvList.map(a=>{const b=ageBucket(a.pay); return `<tr class="clickable" data-agency="${a.id}"><td><b>${a.name}</b></td><td class="num" style="color:var(--warn);font-weight:600">${won(a.recv)}</td><td class="muted">${dispDate(a.pay)}</td><td><span class="badge ${b.c}">${b.l}</span></td></tr>`;}).join(''):'<tr><td colspan="4" class="muted" style="padding:14px;text-align:center">미수금 없음</td></tr>'}</tbody>
-      </table></div>
-      <div class="muted" style="font-size:12px;margin-top:8px">행을 클릭하면 업체 정보(대리점 상세)로 이동합니다.</div>
-    </div></div>
-    <div class="card" style="flex:1;min-width:260px"><div class="pad">
-      <div class="seclabel">알림</div>
-      <div class="ledger-list">
-        ${alerts.map(x=>`<div class="li"><span class="dotmark" style="background:var(--${x.tag})"></span><div class="ti"><div style="font-size:13px;font-weight:600">${x.t}</div><div class="muted" style="font-size:12px">${x.s}</div></div></div>`).join('')}
-      </div>
-    </div></div>
-  </div>
-  ${state.domField==='메디컬'?`<div class="seclabel" style="margin-top:22px">보험수가표 <span class="muted" style="font-weight:400">· 2026-04-27 고시 기준 (보험수가 고정 · 단가는 등급별)</span></div>${sugaTableHTML()}`:''}`;
-}
-
-function vAgencies(){
-  setHead('대리점 관리','국내영업 · '+state.domField);
-  const ags=curAgencies();
-  const anyChecked = state.checked.size>0;
-  const stages=['제안','견적','협상','계약','납품'];
-  const pipeline=pipelineByField[state.domField];
-  const fu=fuByField[state.domField];
-  return `
-  ${fieldTabs()}
-  <div class="pagehead"><div><div class="t">대리점 관리</div><div class="d">${state.domField} · 영업 파이프라인 · Follow-up · 대리점 리스트를 한 화면에서 봅니다.</div></div></div>
-
-  <div class="seclabel">영업 파이프라인 (단계별)</div>
+  <div class="seclabel">영업 일지 <span class="muted" style="font-weight:400">· 오늘 한 일을 적으면 유형별로 자동 분류돼 알림·Follow-up으로 갑니다</span></div>
+  <div class="card"><div class="pad">
+    <div style="display:flex;gap:8px">
+      <input id="journalInput" class="search" style="flex:1" placeholder="예) 한백에 미수금 월말 분할입금 요청하고 왔어 / 부산 정형 반품 2건 접수" onkeydown="if(event.key==='Enter')journalSubmit()">
+      <button class="btn primary" onclick="journalSubmit()">기록</button>
+    </div>
+    <div style="margin-top:4px">${state.journal.length?state.journal.slice(0,6).map(j=>`<div style="display:flex;align-items:flex-start;gap:9px;padding:9px 0;border-bottom:1px solid var(--border)"><span class="badge ${typeColor(j.type)}" style="margin-top:1px">${j.type}</span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${j.summary}</div><div class="muted" style="font-size:11.5px">입력: ${j.raw} · ${j.when}</div></div></div>`).join(''):'<div class="muted" style="font-size:12.5px;padding:10px 2px">아직 기록이 없어요. 막 적어도 돼요 — 예) “한백에 미수금 100만원씩 월말에 입금하라고 말하고 왔어” → <b style="color:var(--ink-2)">[미수금] 한백 월말 100만원 입금 확인</b> 으로 정리·분류됩니다.</div>'}</div>
+  </div></div>
+  <div class="seclabel" style="margin-top:22px">알림 <span class="muted" style="font-weight:400">· 영업 일지에서 분류된 항목이 자동으로 올라옵니다</span></div>
+  <div class="card"><div class="pad"><div class="ledger-list">
+    ${alerts.map(x=>`<div class="li"><span class="dotmark" style="background:var(--${x.tag})"></span><div class="ti"><div style="font-size:13px;font-weight:600">${x.t}</div><div class="muted" style="font-size:12px">${x.s}</div></div></div>`).join('')}
+  </div></div></div>
+  <div class="seclabel" style="margin-top:22px">영업 파이프라인 (단계별)</div>
   <div class="row" style="overflow:auto;flex-wrap:nowrap;gap:10px;margin-bottom:6px">
     ${stages.map(s=>{const deals=pipeline[s]||[];const sum=deals.reduce((a,d)=>a+d.amt,0);
       return `<div style="flex:1;min-width:148px">
@@ -263,35 +301,350 @@ function vAgencies(){
         </div>
       </div>`;}).join('')}
   </div>
-  <div class="muted" style="font-size:12px;margin-bottom:6px">발굴 센터에서 이관된 기회가 자동으로 단계에 표시됩니다.</div>
+  <div class="muted" style="font-size:12px;margin-bottom:6px">발굴 센터에서 이관된 기회가 자동으로 단계에 표시됩니다.</div>`;
+}
 
-  <div class="seclabel" style="margin-top:22px">Follow-up 대시보드</div>
-  <div class="card ov"><table>
-    <thead><tr><th>예정일</th><th>거래처</th><th>유형</th><th>내용</th><th></th></tr></thead>
-    <tbody>${fu.map(f=>`<tr><td><b>${f.date}</b></td><td>${f.agency}</td><td><span class="badge ${f.tag}">${f.type}</span></td><td class="muted">${f.note}</td><td class="num"><button class="btn sm" onclick="toast('완료 처리했습니다')">완료</button></td></tr>`).join('')}</tbody>
-  </table></div>
+function vAgencies(){
+  setHead('미수금 관리','국내영업 · '+state.domField);
+  const ags=curAgencies();
+  const totalRecv=ags.reduce((s,a)=>s+a.recv,0);
+  const recvList=ags.filter(a=>a.recv>0).sort((x,y)=>new Date(x.pay)-new Date(y.pay));
+  const recvCount=recvList.length;
+  const avgDays=recvCount?Math.round(recvList.reduce((s,a)=>s+Math.max(0,-daysUntil(a.pay)),0)/recvCount):0;
+  const tab=state.recvTab||'미수 현황';
+  const tabs=['미수 현황','원장 발송','채권채무조회서 발송'];
+  const fu=state.recvFollowups;
+  const fuOpen=fu.filter(f=>f.status!=='회수완료').length;
+  const fuCard=`<div class="card"><div class="pad">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><div class="seclabel" style="margin:0">회수 Follow-up</div><span class="badge ${fuOpen?'warn':'ok'}">미회수 ${fuOpen}</span></div>
+    <div style="display:flex;gap:6px;margin-bottom:10px"><input id="recvFuInput" class="search" style="flex:1;font-size:12.5px" placeholder="회수 메모 추가…" onkeydown="if(event.key==='Enter')recvFuAdd()"><button class="btn sm primary" onclick="recvFuAdd()">추가</button></div>
+    <div style="max-height:360px;overflow:auto">${fu.length?fu.map((f,i)=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)"><button class="btn sm" style="padding:2px 7px;white-space:nowrap;${f.status==='회수완료'?'background:var(--ok-soft);border-color:#A9DCC4;color:var(--ok)':''}" onclick="recvFuToggle(${i})">${f.status==='회수완료'?'✓ 완료':'미회수'}</button><div style="flex:1;min-width:0;font-size:12.5px;${f.status==='회수완료'?'color:var(--ink-3);text-decoration:line-through':''}">${f.agency?'<b>'+f.agency+'</b> · ':''}${f.note}</div></div>`).join(''):'<div class="muted" style="font-size:12.5px;padding:8px 0">회수 항목이 없어요. 대시보드 <b>영업 일지</b>에 미수 관련 내용을 적으면 자동으로 올라옵니다.</div>'}</div>
+  </div></div>`;
+  let main;
+  if(tab==='미수 현황'){
+    main=`
+    <div class="seclabel">거래처별 미수 현황</div>
+    <div class="card ov"><table>
+      <thead><tr><th>업체</th><th class="num">미수금</th><th>마지막 입금일</th><th>경과</th><th></th></tr></thead>
+      <tbody>${recvList.length?recvList.map(a=>{const b=ageBucket(a.pay); return `<tr class="clickable" data-agency="${a.id}"><td><b>${a.name}</b></td><td class="num" style="color:var(--warn);font-weight:600">${won(a.recv)}</td><td class="muted">${dispDate(a.pay)}</td><td><span class="badge ${b.c}">${b.l}</span></td><td class="num"><button class="btn sm" data-doc="${a.id}">조회서</button></td></tr>`;}).join(''):'<tr><td colspan="5" class="muted" style="padding:14px;text-align:center">미수금 없음</td></tr>'}</tbody>
+    </table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">행 클릭 → 대리점 상세(원장 조회 포함), ‘조회서’ → 채권채무조회서 미리보기.</div>
+    <div class="seclabel" style="margin-top:18px">거래처 검색</div>
+    <div style="position:relative;max-width:440px"><input id="agencySearch" class="search" style="width:100%" placeholder="거래처 이름·지역 검색…" autocomplete="off" oninput="domAgencySearch(this.value)" onfocus="domAgencySearch(this.value)"><div id="agencyResults" class="searchdrop" style="display:none"></div></div>
+    <div class="muted" style="font-size:12.5px;margin-top:8px">업체명을 클릭하면 상세로 들어갑니다.</div>`;
+  } else if(tab==='원장 발송'){
+    main=`<div class="card"><div class="pad" style="padding-top:14px">${ledgerSection('원장')}</div></div>`;
+  } else {
+    main=`<div class="card"><div class="pad" style="padding-top:14px">${ledgerSection('채권채무조회서')}</div></div>`;
+  }
+  return `
+  ${fieldTabs()}
+  <div class="pagehead"><div><div class="t">미수금 관리</div><div class="d">${state.domField} · 미수 현황·원장/채권채무조회서 발송·회수 Follow-up을 한 화면에서.</div></div></div>
+  <div class="kpis" style="margin-bottom:16px">
+    <div class="kpi"><div class="lab">미수금 총액</div><div class="val warn">${won(totalRecv)}</div><div class="sub">${ags.length}곳 중 ${recvCount}곳</div></div>
+    <div class="kpi"><div class="lab">미수 거래처</div><div class="val">${recvCount}곳</div></div>
+    <div class="kpi"><div class="lab">평균 경과일</div><div class="val ${avgDays>=30?'warn':''}">${avgDays}일</div></div>
+  </div>
+  <div class="card" style="margin-bottom:14px"><div class="tabs">${tabs.map(t=>`<button class="${t===tab?'active':''}" onclick="setRecvTab('${t}')">${t}</button>`).join('')}</div></div>
+  <div class="row" style="align-items:flex-start;gap:14px">
+    <div style="flex:1;min-width:300px">${main}</div>
+    <div style="flex:0 0 290px;min-width:260px">${fuCard}</div>
+  </div>`;
+}
+function domAgencySearch(q){
+  const box=document.getElementById('agencyResults'); if(!box) return;
+  q=(q||'').trim();
+  if(!q){ box.style.display='none'; box.innerHTML=''; return; }
+  const list=curAgencies().filter(a=>a.name.includes(q)||a.region.includes(q));
+  box.style.display='block';
+  if(!list.length){ box.innerHTML='<div class="muted" style="font-size:12.5px;padding:10px 12px">‘'+q+'’ 검색 결과가 없습니다.</div>'; return; }
+  box.innerHTML=list.map(a=>`<div class="opt clickable" data-agency="${a.id}"><div style="flex:1;min-width:0"><b style="font-size:13px">${a.name}</b> <span class="muted" style="font-size:12px">· ${a.region} · ${a.grade}등급</span></div><span class="num" style="font-size:12.5px;white-space:nowrap;${a.recv>0?'color:var(--warn);font-weight:600':'color:var(--ink-3)'}">${a.recv>0?won(a.recv):'미수 없음'}</span></div>`).join('');
+}
 
-  <div class="pagehead" style="margin:22px 0 10px"><div style="font-weight:700">대리점 리스트</div>
-    <div class="quick">
-      <button class="btn" id="exportBtn">엑셀 내보내기</button>
-      <button class="btn" data-view="dom-ledger">채권채무조회서 발송 →</button>
+/* ---------------- 거래처 등록·수정·조회 (DUZONE 일반거래처등록 스타일) ---------------- */
+let clients = [
+  {code:'00001', name:'한백', short:'한백', biz:'221-11-80344', ceo:'김우영', sector:'도소매', item:'의료기기', zip:'24239', addr:'인천광역시 미추홀구 경인로 100', tel:'032-123-4567', fax:'032-123-4568', email:'hanbaek@example.kr', region:'인천·경기', grade:'A', since:'2021-03-02', use:'사용', log:[]},
+  {code:'00002', name:'대성 메디칼', short:'대성', biz:'113-81-00045', ceo:'박성호', sector:'도소매', item:'의료기기', zip:'06236', addr:'서울특별시 강남구 테헤란로 201', tel:'02-555-1200', fax:'02-555-1201', email:'sales@daesung.kr', region:'서울', grade:'A+', since:'2019-07-10', use:'사용', log:[]},
+  {code:'00003', name:'심플렉스인터넷(카페24)', short:'카페24', biz:'117-81-40065', ceo:'이재석', sector:'서비스', item:'전자상거래', zip:'07242', addr:'서울특별시 영등포구 은행로 11', tel:'1644-0010', fax:'', email:'help@cafe24.com', region:'서울', grade:'B', since:'2022-01-05', use:'사용', log:[]},
+  {code:'00004', name:'부산 정형', short:'부산정형', biz:'605-12-77821', ceo:'정대훈', sector:'도소매', item:'의료기기', zip:'47007', addr:'부산광역시 부산진구 중앙대로 700', tel:'051-700-3000', fax:'051-700-3001', email:'', region:'부산·경남', grade:'B', since:'2020-11-18', use:'사용', log:[]},
+  {code:'00005', name:'우리 헬스케어', short:'우리헬스', biz:'504-23-66110', ceo:'한지원', sector:'도소매', item:'의료기기', zip:'41937', addr:'대구광역시 중구 동덕로 50', tel:'053-200-7700', fax:'', email:'care@woori.kr', region:'대구', grade:'B', since:'2023-02-21', use:'사용', log:[]},
+  {code:'00006', name:'중부 의료기', short:'중부', biz:'305-10-22034', ceo:'오세훈', sector:'도소매', item:'의료기기', zip:'34111', addr:'대전광역시 유성구 대학로 99', tel:'042-600-1200', fax:'', email:'', region:'대전·충청', grade:'C', since:'2024-05-09', use:'미사용', log:[]},
+];
+function clientFind(code){ return clients.find(c=>c.code===code); }
+function clientNextCode(){ const mx=clients.reduce((m,c)=>Math.max(m, parseInt(c.code,10)||0),0); return String(mx+1).padStart(5,'0'); }
+function nowStamp(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
+function clientListHTML(q){
+  const list=clients.filter(c=>!q||c.name.includes(q)||c.code.includes(q)||(c.ceo||'').includes(q));
+  return list.length? list.map(c=>`<div class="clrow ${c.code===state.clientSel&&!state.clientNew?'on':''}" onclick="clientSelect('${c.code}')"><span class="muted" style="font-size:11.5px;width:42px;flex:0 0 42px">${c.code}</span><b style="flex:1;min-width:0;font-size:13px;${c.use==='미사용'?'color:var(--ink-3);text-decoration:line-through':''}">${c.name}</b>${c.grade?gradeBadge(c.grade):''}</div>`).join('')
+    : '<div class="muted" style="font-size:12.5px;padding:12px">검색 결과가 없습니다.</div>';
+}
+function clientListFilter(q){ const box=document.getElementById('clientList'); if(box) box.innerHTML=clientListHTML((q||'').trim()); }
+function clientSelect(code){ state.clientSel=code; state.clientNew=false; state.clientOcr=null; render(); }
+function clientNewForm(){ state.clientNew=true; state.clientOcr=null; render(); }
+function clientOcr(input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  const st=document.getElementById('ocrStatus'); if(st) st.innerHTML='<span class="badge warn">인식 중… '+f.name+'</span>';
+  const img=(f.type||'').startsWith('image/')?URL.createObjectURL(f):'';
+  // (프로토타입) 실제 OCR 대신 사업자등록증에서 읽어온 것처럼 결과를 채웁니다.
+  setTimeout(function(){
+    state.clientNew=true;
+    state.clientOcr={ name:'메디라인 주식회사', biz:'215-87-43210', ceo:'김도윤', sector:'도매 및 소매업', item:'의료용품', addr:'경기도 성남시 분당구 판교로 256', since:'2018-04-15',
+      _img:img, _file:f.name, _fields:['name','biz','ceo','sector','item','addr','since'] };
+    toast('사업자등록증을 자동 인식했어요 — 내용을 확인·수정 후 등록하세요');
+    render();
+  }, 850);
+}
+function clientSave(){
+  const g=id=>{const e=document.getElementById(id); return e?e.value.trim():'';};
+  const data={ name:g('c_name'), short:g('c_short'), biz:g('c_biz'), ceo:g('c_ceo'), sector:g('c_sector'), item:g('c_item'), zip:g('c_zip'), addr:g('c_addr'), tel:g('c_tel'), fax:g('c_fax'), email:g('c_email'), region:g('c_region'), grade:g('c_grade'), since:g('c_since'), use:g('c_use') };
+  if(!data.name){ toast('거래처명은 필수입니다'); return; }
+  if(state.clientNew){
+    const code=clientNextCode();
+    clients.push(Object.assign({code, log:[{when:nowStamp(), items:['신규 등록']}]}, data));
+    state.clientSel=code; state.clientNew=false;
+    toast('거래처 '+code+' 신규 등록되었습니다');
+  } else {
+    const c=clientFind(state.clientSel); if(!c){ toast('대상을 찾을 수 없습니다'); return; }
+    const labels={name:'거래처명',short:'약칭',biz:'사업자등록번호',ceo:'대표자',sector:'업태',item:'종목',zip:'우편번호',addr:'주소',tel:'전화',fax:'팩스',email:'메일',region:'지역',grade:'등급',since:'거래시작일',use:'사용여부'};
+    const items=[];
+    Object.keys(data).forEach(k=>{ if((c[k]||'')!==(data[k]||'')){ items.push(`${labels[k]}: ‘${c[k]||'-'}’ → ‘${data[k]||'-'}’`); c[k]=data[k]; } });
+    if(!items.length){ toast('변경된 내용이 없습니다'); return; }
+    c.log=c.log||[]; c.log.unshift({when:nowStamp(), items});
+    toast('수정되었습니다 ('+items.length+'개 항목)');
+  }
+  state.clientOcr=null;
+  render();
+}
+
+/* ---------------- 영업 일지 (자동 분류) ---------------- */
+function typeColor(t){ return {회수:'warn',출고:'teal',반품:'danger',계약:'info',일반:'muted'}[t]||'muted'; }
+function allAgencyNames(){ return clients.map(c=>c.name).concat(Object.keys(agenciesByField).reduce((a,k)=>a.concat(agenciesByField[k].map(x=>x.name)),[])); }
+function classifyLog(t){
+  let type='일반';
+  if(/미수|입금|수금|채권|받을|결제|미납|회수/.test(t)) type='회수';
+  else if(/출고|배송|납품|선적|재고|발주/.test(t)) type='출고';
+  else if(/반품|교환|불량|클레임|하자|파손/.test(t)) type='반품';
+  else if(/계약|갱신|단가|견적|입찰/.test(t)) type='계약';
+  let agency='';
+  for(const nm of allAgencyNames()){ if(nm && t.includes(nm)){ agency=nm; break; } }
+  return {type, agency};
+}
+function lotToDate(lot){ const m=String(lot||'').match(/^(\d{4})(\d{2})(\d{2})/); return m?`${m[1]}-${m[2]}-${m[3]}`:(lot||'—'); }
+// 막 적은 메모 → 업무 용어로 정리 ([유형] 거래처 시점 금액 핵심)
+function summarizeLog(t, type, agency){
+  const tag={회수:'미수금',출고:'출고',반품:'반품',계약:'계약',일반:'활동'}[type];
+  let amount=''; const am=t.match(/([0-9][0-9,]*)\s*(억원|억|만원|만|천원|천|원)/);
+  if(am){ const num=am[1].replace(/,/g,''); const unit=/억/.test(am[2])?'억원':/만/.test(am[2])?'만원':/천/.test(am[2])?'천원':'원'; amount=num+unit; }
+  let timing=''; const tk=['월말','말일','매월','분기말','반기말','연말','이번 주','이번주','다음 주','다음주','금주','오늘','내일','모레'];
+  for(const k of tk){ if(t.includes(k)){ timing=k.replace('이번주','이번 주').replace('다음주','다음 주'); break; } }
+  const dm=t.match(/D[-–]?\s?(\d+)/i); if(dm) timing='D-'+dm[1];
+  let qty=''; const qm=t.match(/([0-9]+)\s*(건|개|박스|롤|EA|ea)/); if(qm) qty=qm[1]+(qm[2]==='ea'?'EA':qm[2]);
+  let action='';
+  if(type==='회수'){
+    if(/못\s*받|안\s*받|미입금|연체|밀린|아직[^.]*(안|않|못)|입금\s*(안|못|전)|안\s*들어|미회수/.test(t)) action='미입금';
+    else if(/입금\s*완료|입금됨|입금\s*받|입금\s*됐|받았|들어왔|수금\s*완료|완납|결제\s*완료|회수\s*완료|정산\s*완료/.test(t)) action='입금 완료';
+    else if(/한대|한다고|하기로|하겠|할게|줄게|준다고|준대|예정|약속|확약/.test(t)) action='입금 예정';
+    else if(/하라고|요청|독촉|달라고|부탁|당부|말하고|얘기|안내|통보|협의/.test(t)) action='입금 요청';
+    else action='회수 예정';
+  }
+  else if(type==='출고') action=/납품/.test(t)?'납품':/발송|보냄|보냈/.test(t)?'발송':'출고';
+  else if(type==='반품') action=/교환/.test(t)?'교환 접수':'반품 접수';
+  else if(type==='계약') action=/갱신/.test(t)?'계약 갱신':/견적/.test(t)?'견적 발송':/단가/.test(t)?'단가 협의':'계약 협의';
+  const parts=[agency, timing, amount, qty, action].filter(Boolean);
+  return `[${tag}] ${parts.join(' ')}`.replace(/\s+/g,' ').trim();
+}
+function journalSubmit(){
+  const inp=document.getElementById('journalInput'); const v=(inp&&inp.value||'').trim(); if(!v) return;
+  const r=classifyLog(v);
+  const summary=summarizeLog(v, r.type, r.agency);
+  state.journal.unshift({when:nowStamp(), raw:v, summary, type:r.type, agency:r.agency});
+  state.userAlerts.unshift({tag:typeColor(r.type), t:summary, s:v});
+  if(r.type==='회수') state.recvFollowups.unshift({agency:r.agency||'', note:summary.replace(/^\[[^\]]+\]\s*/, ''), status:'미회수'});
+  toast('영업 일지 정리 → '+summary);
+  render();
+}
+/* ---------------- 미수금 회수 Follow-up ---------------- */
+function recvFuAdd(){ const inp=document.getElementById('recvFuInput'); const v=(inp&&inp.value||'').trim(); if(!v){ toast('내용을 입력하세요'); return; } state.recvFollowups.unshift({agency:'', note:v, status:'미회수'}); toast('회수 Follow-up에 추가했습니다'); render(); }
+function recvFuToggle(i){ const f=state.recvFollowups[i]; if(!f) return; f.status=f.status==='회수완료'?'미회수':'회수완료'; render(); }
+function setRecvTab(t){ state.recvTab=t; render(); }
+function setShipMode(m){ state.shipMode=m; render(); }
+/* ---------------- 출고현황 (출고 내역 리스트 — 언제·무엇·수량) ---------------- */
+const shipRecords=[
+  {date:'2026-06-13', no:'IS2606000412', agency:'한백', code:'NPC-2P-GR', item:'NAC 캐스트 2"', qty:100, price:1200},
+  {date:'2026-06-13', no:'IS2606000412', agency:'한백', code:'NHRS-3450N', item:'롤 스플린트 3"', qty:50, price:33700},
+  {date:'2026-06-12', no:'IS2606000388', agency:'대성 메디칼', code:'NPC-3P-GR', item:'NAC 캐스트 3"', qty:80, price:1700},
+  {date:'2026-06-12', no:'IS2606000388', agency:'대성 메디칼', code:'NHPS-3014N', item:'(프리컷) NHPS-3014', qty:40, price:3800},
+  {date:'2026-06-10', no:'IS2606000351', agency:'현대의료홀딩스', code:'MDCAAA-0307-BL', item:'(알파)NAC-2F-BL', qty:30, price:1200},
+  {date:'2026-06-10', no:'IS2606000351', agency:'현대의료홀딩스', code:'MDCAAA-0407-GR', item:'(알파)NAC-3F-GR', qty:100, price:1700},
+  {date:'2026-06-09', no:'IS2606000333', agency:'우리 헬스케어', code:'NPC-4P-GR', item:'NAC 캐스트 4"', qty:60, price:1900},
+  {date:'2026-06-05', no:'IS2606000290', agency:'부산 정형', code:'NHRS-4450N', item:'롤 스플린트 4"', qty:30, price:40000},
+  {date:'2026-06-03', no:'IS2606000251', agency:'한백', code:'NUP-3100', item:'언더패드 3"', qty:20, price:22000},
+  {date:'2026-05-29', no:'IS2605000902', agency:'대성 메디칼', code:'NPC-2P-GR', item:'NAC 캐스트 2"', qty:120, price:1200},
+  {date:'2026-05-23', no:'IS2605000844', agency:'중부 의료기', code:'NHPS-4034N', item:'(프리컷) NHPS-4034', qty:25, price:9500},
+  {date:'2026-05-16', no:'IS2605000770', agency:'현대의료홀딩스', code:'NPC-5P-GR', item:'NAC 캐스트 5"', qty:50, price:2300},
+];
+function shipStatusList(){ const f=state.shipFilter||'전체'; return f==='전체'?shipRecords:shipRecords.filter(r=>r.agency===f); }
+function shipSetFilter(v){ state.shipFilter=v; render(); }
+function shipToggle(k){ if(state.shipChk.has(k)) state.shipChk.delete(k); else state.shipChk.add(k); render(); }
+function shipCheckAll(){ const keys=shipStatusList().map(r=>r.no+'-'+r.code); const allOn=keys.every(k=>state.shipChk.has(k)); keys.forEach(k=>allOn?state.shipChk.delete(k):state.shipChk.add(k)); render(); }
+function sendOk(key){ var h=0; for(var i=0;i<key.length;i++) h=(h*31+key.charCodeAt(i))>>>0; return (h%5)!==0; }
+function statusBadge(s){ if(s==='전송중') return '<span class="badge info">전송중…</span>'; if(s==='성공') return '<span class="badge ok">발송 성공</span>'; if(s==='실패') return '<span class="badge danger">실패 · 재발송</span>'; return '<span class="muted">미발송</span>'; }
+function shipSend(){
+  const sel=shipStatusList().filter(r=>state.shipChk.has(r.no+'-'+r.code));
+  if(!sel.length){ toast('발송할 출고 건을 선택하세요'); return; }
+  const vv=(document.getElementById('shipVia')||{}).value||'팩스'; const via=vv==='팩스'?'하나팩스':'다우오피스 메일';
+  const keys=sel.map(r=>r.no+'-'+r.code);
+  const retry={}; keys.forEach(k=>{ retry[k]=state.shipStatus[k]==='실패'; state.shipStatus[k]='전송중'; });
+  toast(keys.length+'건 출고현황 발송 중… ('+via+')'); render();
+  setTimeout(function(){ var ok=0,fail=0; keys.forEach(function(k,i){ var s=retry[k]?true:(i%5!==4); state.shipStatus[k]=s?'성공':'실패'; if(s){state.shipChk.delete(k);ok++;}else fail++; }); render(); toast('출고현황 발송 완료 — 성공 '+ok+(fail?(' / 실패 '+fail+' (재발송하면 성공)'):'')+' ('+via+')'); }, 1000);
+}
+function shipStatusSection(){
+  const recs=shipStatusList();
+  const agencies=[...new Set(shipRecords.map(r=>r.agency))];
+  const f=state.shipFilter||'전체';
+  const keys=recs.map(r=>r.no+'-'+r.code);
+  const allOn=keys.length&&keys.every(k=>state.shipChk.has(k));
+  const selN=keys.filter(k=>state.shipChk.has(k)).length;
+  return `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <select class="search" style="width:auto;font-size:12.5px" onchange="shipSetFilter(this.value)"><option ${f==='전체'?'selected':''}>전체</option>${agencies.map(a=>`<option ${a===f?'selected':''}>${a}</option>`).join('')}</select>
+      <span class="muted" style="font-size:12px">파일형식</span><select id="shipFmt" class="search" style="width:auto;font-size:12.5px"><option>PDF</option><option>엑셀</option></select>
+      <span class="muted" style="font-size:12px">전송방법</span><select id="shipVia" class="search" style="width:auto;font-size:12.5px"><option>팩스</option><option>메일</option></select>
+      <div style="flex:1"></div>
+      <button class="btn primary" onclick="shipSend()">선택 발송 (${selN})</button>
     </div>
+    <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
+      <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="shipCheckAll()"></th><th>출고일자</th><th>출고번호</th><th>거래처</th><th>품번</th><th>품명</th><th class="num">출고수량</th><th class="num">금액</th><th>발송 상태</th></tr></thead>
+      <tbody>${recs.map(r=>{const k=r.no+'-'+r.code; return `<tr><td><input type="checkbox" ${state.shipChk.has(k)?'checked':''} onclick="shipToggle('${k}')"></td><td>${r.date}</td><td>${r.no}</td><td><b>${r.agency}</b></td><td class="muted" style="font-size:12px">${r.code}</td><td>${r.item}</td><td class="num">${fmt(r.qty)}</td><td class="num">${won(r.qty*r.price)}</td><td>${statusBadge(state.shipStatus[k])}</td></tr>`;}).join('')}</tbody>
+    </table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">언제·무엇이·얼마나 나갔는지 출고 내역입니다. 체크 → [선택 발송]이면 끝 (<b style="font-weight:600">팩스는 하나팩스, 메일은 다우오피스 API</b>로 자동 발송).</div>`;
+}
+/* ---------------- 발송 섹션 공용 (원장/출고현황/채권채무조회서) ---------------- */
+function ledgerSection(group){
+  const now=new Date(); const mLabel=(now.getMonth()+1)+'월';
+  const list=ledgerTargets[group]||[];
+  const keys=list.map(t=>group+'::'+t.name);
+  const allOn=keys.length&&keys.every(k=>state.ledgerChk.has(k));
+  const selN=keys.filter(k=>state.ledgerChk.has(k)).length;
+  const isRecv=group==='채권채무조회서';
+  const desc={'원장':'매달 원장 — 매출 마감 후 발송. 거래처별 파일형식(엑셀/PDF/둘다)·전송방법(팩스/메일)·경로가 다릅니다.','출고현황':'매달 출고현황 — 월말 발송. 거래처별 파일형식·전송방법·경로 적용.','채권채무조회서':'반기말(6/30·12/31) 기준 잔액 보유 거래처에 발송. 회신처 FAX 031-629-5216.'}[group];
+  return `
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <span class="badge teal">${isRecv?'기준 '+now.getFullYear()+'년 반기말':'기준 '+now.getFullYear()+'년 '+mLabel+' 마감'}</span>
+      <span class="muted" style="font-size:12px">${desc}</span>
+      <div style="flex:1"></div>
+      <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="ledgerUpload(this,'${isRecv?'잔액':'마감 자료'}')">${isRecv?'잔액 업로드 (엑셀)':'마감 자료 업로드 (엑셀)'}</label>
+    </div>
+    <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
+      <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="ledgerCheckAll('${group}')"></th><th>거래처</th><th>등급</th>${isRecv?'<th class="num">미수 잔액</th>':'<th>특이</th>'}<th>파일형식</th><th>전송방법</th><th>경로</th><th>발송 상태</th></tr></thead>
+      <tbody>${list.map(t=>{const k=group+'::'+t.name; return `<tr>
+        <td><input type="checkbox" ${state.ledgerChk.has(k)?'checked':''} onclick="ledgerToggle('${k}')"></td>
+        <td><b>${t.name}</b></td>
+        <td>${t.grade?gradeBadge(t.grade):'<span class="muted">—</span>'}</td>
+        ${isRecv?`<td class="num" style="color:var(--warn);font-weight:600">${won(t.recv)}</td>`:`<td>${t.note?'<span class="badge warn">'+t.note+'</span>':'<span class="muted">—</span>'}</td>`}
+        <td><select onchange="ledgerSet('${group}','${t.name}','fmt',this.value)" style="border:1px solid var(--border-2);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:12px">${['엑셀','PDF','둘다'].map(o=>`<option ${t.fmt===o?'selected':''}>${o}</option>`).join('')}</select></td>
+        <td><select onchange="ledgerSet('${group}','${t.name}','via',this.value)" style="border:1px solid var(--border-2);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:12px">${['팩스','메일'].map(o=>`<option ${t.via===o?'selected':''}>${o}</option>`).join('')}</select></td>
+        <td class="muted" style="font-size:12px">${t.dest}</td>
+        <td>${statusBadge(state.ledgerStatus[k])}</td>
+      </tr>`;}).join('')}</tbody>
+    </table></div>
+    <div class="quick" style="margin-top:13px"><button class="btn primary" onclick="ledgerSend('${group}')">선택 발송 (${selN})</button><button class="btn" onclick="histModal()">발송 기록</button></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">잔액·마감 자료는 <b style="font-weight:600">영림원에서 내보낸 엑셀을 업로드</b>해 채웁니다(반자동 · 영림원 API 미지원). 발송은 <b style="font-weight:600">팩스=하나팩스, 메일=다우오피스</b>로 자동 처리됩니다.</div>`;
+}
+/* ---------------- 보험수가표·견적서 ---------------- */
+function vPricing(){
+  setHead('보험수가표 · 견적서','국내영업');
+  return `
+  <div class="pagehead"><div><div class="t">보험수가표 · 견적서</div><div class="d">메디컬 보험수가표(2026-04-27 고시 기준)를 확인하고, 거래처 등급에 맞춰 견적서를 발송합니다.</div></div>
+    <button class="btn primary" data-view="quote">견적서 작성</button></div>
+  ${sugaTableHTML()}`;
+}
+/* ---------------- 계약 관리 ---------------- */
+let contracts=[
+  {no:'C-2026-018', agency:'대성 메디칼', title:'연간 공급계약 2026', start:'2026-01-01', end:'2026-12-31', amount:120000000, status:'유효'},
+  {no:'C-2026-011', agency:'한백', title:'연간 공급계약 2026', start:'2026-01-01', end:'2026-12-31', amount:84000000, status:'유효'},
+  {no:'C-2025-204', agency:'우리 헬스케어', title:'대리점 거래계약', start:'2024-07-01', end:'2026-08-31', amount:36000000, status:'갱신 임박'},
+  {no:'C-2025-180', agency:'부산 정형', title:'대리점 거래계약', start:'2023-09-01', end:'2025-08-31', amount:24000000, status:'만료'},
+];
+function contractNew(){ toast('새 계약서 작성 (프로토타입) — 거래처·기간·금액 입력 후 생성'); }
+function vContracts(){
+  setHead('계약 관리','국내영업');
+  const soon=contracts.filter(c=>{const d=daysUntil(c.end); return d>=0&&d<=90;}).length;
+  const expired=contracts.filter(c=>daysUntil(c.end)<0||c.status==='만료').length;
+  const sc={'유효':'ok','갱신 임박':'warn','만료':'danger'};
+  return `
+  <div class="pagehead"><div><div class="t">계약 관리</div><div class="d">거래처별 계약을 한눈에 보고, 만료·갱신을 관리하며 새 계약서를 작성합니다.</div></div>
+    <button class="btn primary" onclick="contractNew()">+ 새 계약서</button></div>
+  <div class="kpis" style="margin-bottom:20px">
+    <div class="kpi"><div class="lab">전체 계약</div><div class="val">${contracts.length}건</div></div>
+    <div class="kpi"><div class="lab">갱신 임박 (90일↓)</div><div class="val ${soon?'warn':''}">${soon}건</div></div>
+    <div class="kpi"><div class="lab">만료</div><div class="val ${expired?'danger':''}">${expired}건</div></div>
   </div>
   <div class="card ov"><table>
-    <thead><tr>
-      <th>대리점</th><th>지역</th><th>단가 등급</th>
-      <th class="num">당월 매출</th><th class="num">미수금</th><th>최근 접촉</th>
-    </tr></thead>
-    <tbody>
-      ${ags.map(a=>`<tr class="clickable" data-agency="${a.id}">
-        <td><b>${a.name}</b></td><td>${a.region}</td><td>${gradeBadge(a.grade)}</td>
-        <td class="num">${won(a.sales)}</td>
-        <td class="num ${a.recv>0?'':'muted'}" style="${a.recv>0?'color:var(--warn);font-weight:600':''}">${a.recv>0?won(a.recv):'-'}</td>
-        <td class="muted">${a.last}</td>
-      </tr>`).join('')}
-    </tbody>
+    <thead><tr><th>계약번호</th><th>거래처</th><th>계약명</th><th>기간</th><th class="num">계약금액</th><th>상태</th><th></th></tr></thead>
+    <tbody>${contracts.map(c=>{const dl=daysUntil(c.end); return `<tr><td>${c.no}</td><td><b>${c.agency}</b></td><td>${c.title}</td><td class="muted">${c.start} ~ ${c.end}${dl>=0&&dl<=90?` <span class="badge warn">D-${dl}</span>`:''}</td><td class="num">${won(c.amount)}</td><td><span class="badge ${sc[c.status]||'muted'}">${c.status}</span></td><td class="num"><button class="btn sm" onclick="toast('${c.no} 계약서 열기 (프로토타입)')">열기</button></td></tr>`;}).join('')}</tbody>
   </table></div>
-  <div class="muted" style="font-size:12px;margin-top:10px">행을 클릭하면 대리점 상세로 이동합니다. 채권채무조회서 발송은 ‘출고현황 · 원장 발송’ 메뉴로 이동했습니다.</div>`;
+  <div class="muted" style="font-size:12px;margin-top:10px">개별 계약 작성·조회는 거래처 상세 ‘계약’ 탭과도 연동됩니다.</div>`;
+}
+function vClients(){
+  setHead('거래처 등록','국내영업 · 거래처 정보');
+  if(state.clientSel===undefined) state.clientSel=clients[0].code;
+  const isNew=!!state.clientNew;
+  const ocr=isNew?(state.clientOcr||null):null;
+  const c=isNew?(state.clientOcr||{}):(clientFind(state.clientSel)||{});
+  const autoSet=new Set((ocr&&ocr._fields)||[]);
+  const fld=(id,label,val,ph)=>{const auto=autoSet.has(id.slice(2));return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><label class="muted" style="width:104px;flex:0 0 104px;font-size:12.5px">${label}${auto?' <span class="badge ok" style="padding:0 5px;font-size:9.5px">인식</span>':''}</label><input id="${id}" value="${(val||'').replace(/"/g,'&quot;')}" ${ph?`placeholder="${ph}"`:''} style="flex:1;min-width:0;border:1px solid ${auto?'#9CD3B6':'var(--border-2)'};${auto?'background:var(--ok-soft);':''}border-radius:7px;padding:7px 10px;font-family:inherit;font-size:13px;box-sizing:border-box"></div>`;};
+  const sel=(id,label,val,opts)=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><label class="muted" style="width:104px;flex:0 0 104px;font-size:12.5px">${label}</label><select id="${id}" style="flex:1;border:1px solid var(--border-2);border-radius:7px;padding:7px 10px;font-family:inherit;font-size:13px">${opts.map(o=>`<option ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
+  return `
+  <div class="pagehead"><div><div class="t">거래처 등록 · 수정 · 조회</div><div class="d">좌측에서 거래처를 찾아 선택하면 정보가 뜨고, 고친 뒤 저장하면 수정 이력이 남습니다. 신규 등록도 여기서 합니다.</div></div>
+    <div class="quick"><button class="btn" onclick="clientNewForm()">+ 신규</button><button class="btn primary" onclick="clientSave()">저장</button></div>
+  </div>
+  <div class="card" style="margin-bottom:14px"><div class="pad" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 16px">
+    <label style="display:inline-flex;align-items:center;gap:11px;border:1.5px dashed var(--border-2);border-radius:10px;padding:11px 15px;cursor:pointer;background:var(--surface-2)">
+      <input type="file" accept="image/*,.pdf" style="display:none" onchange="clientOcr(this)">
+      <svg width="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--teal-d);flex:0 0 22px"><path d="M2 7.5a2 2 0 0 1 2-2h2.2l1.3-2h6.6l1.3 2H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><circle cx="12" cy="12" r="3.4"/></svg>
+      <div><b style="font-size:13px">사업자등록증 올리기 → 자동 입력</b><div class="muted" style="font-size:12px">사진·PDF를 올리면 상호·등록번호·대표자·주소·업태·종목을 자동 인식합니다.</div></div>
+    </label>
+    <div id="ocrStatus" style="flex:1;min-width:150px;font-size:12.5px">${ocr?'<span class="badge ok">자동 인식 완료 · '+(ocr._file||'')+'</span>':'<span class="muted">아직 올린 파일이 없습니다.</span>'}</div>
+  </div></div>
+  ${ocr?`<div class="card" style="margin-bottom:14px;border-left:3px solid var(--ok)"><div class="pad" style="display:flex;align-items:center;gap:13px;padding:13px 16px">
+    ${ocr._img?`<img src="${ocr._img}" style="width:58px;height:40px;object-fit:cover;border-radius:7px;border:1px solid var(--border)">`:'<span class="badge teal">PDF</span>'}
+    <div style="flex:1"><b style="font-size:13px">사업자등록증에서 자동 인식했어요</b><div class="muted" style="font-size:12px">초록색 ‘인식’ 항목을 확인·수정한 뒤 <b>저장</b>하면 등록됩니다. 전화·팩스·메일·약칭·지역·등급은 직접 입력하세요.</div></div>
+  </div></div>`:''}
+  <div class="row" style="align-items:flex-start;flex-wrap:nowrap;gap:14px">
+    <div class="card" style="flex:0 0 268px"><div class="pad" style="padding:12px">
+      <input class="search" style="width:100%;margin-bottom:8px" placeholder="거래처명·코드·대표자 검색…" oninput="clientListFilter(this.value)">
+      <div id="clientList" style="max-height:560px;overflow:auto">${clientListHTML('')}</div>
+    </div></div>
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
+      <div class="card"><div class="pad">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">
+          <span class="badge ${isNew?'teal':'muted'}">${isNew?(ocr?'신규 · 자동 인식':'신규 등록'):'거래처코드 '+(c.code||'')}</span>
+          <b style="font-size:15px">${isNew?(c.name||'새 거래처'):(c.name||'')}</b>
+        </div>
+        ${fld('c_name','거래처명',c.name)}
+        ${fld('c_short','거래처약칭',c.short)}
+        ${fld('c_biz','사업자등록번호',c.biz,'000-00-00000')}
+        ${fld('c_ceo','대표자성명',c.ceo)}
+        ${fld('c_sector','업태',c.sector)}
+        ${fld('c_item','종목',c.item)}
+        ${fld('c_zip','우편번호',c.zip)}
+        ${fld('c_addr','사업장주소',c.addr)}
+        ${fld('c_tel','전화번호',c.tel)}
+        ${fld('c_fax','팩스번호',c.fax)}
+        ${fld('c_email','메일주소',c.email)}
+        ${fld('c_region','지역',c.region)}
+        ${sel('c_grade','거래처등급',c.grade||'B',['A+','A','B','C'])}
+        ${fld('c_since','거래시작일',c.since,'YYYY-MM-DD')}
+        ${sel('c_use','사용여부',c.use||'사용',['사용','미사용'])}
+        <div class="quick" style="margin-top:6px"><button class="btn primary" onclick="clientSave()">저장</button>${isNew?'':`<button class="btn" onclick="clientNewForm()">+ 신규</button>`}</div>
+      </div></div>
+      <div class="card"><div class="pad">
+        <div class="seclabel">수정 이력</div>
+        ${isNew?'<div class="muted" style="font-size:12.5px">신규 등록 후 이력이 쌓입니다.</div>':((c.log&&c.log.length)?`<div class="ledger-list">${c.log.map(l=>`<div class="li"><div class="ti" style="font-size:12.5px">${l.items.map(it=>`<div>${it}</div>`).join('')}</div><span class="muted" style="font-size:11.5px;white-space:nowrap;margin-left:10px">${l.when}</span></div>`).join('')}</div>`:'<div class="muted" style="font-size:12.5px">수정 이력이 없습니다.</div>')}
+      </div></div>
+    </div>
+  </div>`;
 }
 
 function vAgencyDetail(){
@@ -362,7 +715,7 @@ function vAgencyDetail(){
     body=`<div style="margin-top:18px"><div class="seclabel">활동 로그</div><div class="card"><div class="pad ledger-list">${[['방문','정기 미팅 — 6월 발주','06/09'],['통화','납기 협의','06/05'],['메일','견적서 v2 발송','06/03']].map(x=>`<div class="li"><span class="badge muted">${x[0]}</span><div class="ti">${x[1]}</div><span class="muted" style="font-size:12px">${x[2]}</span></div>`).join('')}</div></div></div>`;
   }
   return `
-    <div class="back" data-view="dom-agencies">← 대리점 관리</div>
+    <div class="back" data-view="dom-agencies">← 미수금 관리</div>
     <div class="actor" style="margin-bottom:6px">
       <div class="av">${a.name.slice(0,2)}</div>
       <div><div style="font-size:18px;font-weight:700">${a.name}</div>
@@ -500,9 +853,9 @@ function docHTML(a, bulk){
 function vDoc(){
   const a=findAgency(state.docAgency);
   setHead('채권채무조회서','국내영업 · 문서 미리보기');
-  return `<div class="back" data-view="dom-agencies">← 대리점 관리로</div>
+  return `<div class="back" data-view="dom-agencies">← 미수금 관리로</div>
   <div class="pagehead"><div><div class="t">채권채무조회서 미리보기</div><div class="d">거래처명과 외상매출금(미수 잔액)이 자동으로 입력되었습니다.</div></div>
-    <button class="btn primary" onclick="toast('${a.name} 앞으로 팩스 발송 (프로토타입)')">팩스 발송</button></div>
+    <button class="btn primary" onclick="toast('${a.name} 앞으로 하나팩스로 발송 (프로토타입)')">하나팩스로 발송</button></div>
   ${docHTML(a,false)}`;
 }
 
@@ -526,17 +879,16 @@ function vMarket(){
   const m=state.market;
   const regions=regionsOf(m.country);
   const list=mktList();
+  if(!m.chat.length){ m.chat.push({r:'ai',t:`막연한 시장이어도 괜찮아요 — 일단 후보 ${list.length}곳을 찾아왔어요. 국가·지역·규모·라이선스·취급 품목으로 함께 좁혀가요. (예: “일본에서 캐스트 취급 중견만”)`}); }
   const opt=(arr,sel)=>arr.map(x=>`<option ${x===sel?'selected':''}>${x}</option>`).join('');
-  let results='';
-  if(m.searched){
-    results=`
-    <div id="mktResults" class="row" style="margin-top:18px">
+  const results=`
+    <div id="mktResults" class="row" style="margin-top:16px">
       <div class="card" style="flex:1.4;min-width:300px"><div class="pad">
-        <div class="pagehead" style="margin-bottom:10px"><div style="font-weight:700">검색 결과 · 후보 ${list.length}곳</div>
+        <div class="pagehead" style="margin-bottom:10px"><div style="font-weight:700">탐색 결과 · 후보 ${list.length}곳 <span class="muted" style="font-weight:400">· ${m.country==='전 세계 (미정)'?'전 세계':m.country}${m.region!=='전체'?' · '+m.region:''}</span></div>
           <button class="btn primary sm" onclick="toast('선택 후보를 최종 잠재 거래처 리스트에 확정했습니다');setTimeout(()=>go('disc-leads'),750)">최종 리스트에 확정 →</button></div>
-        <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
-          <thead><tr><th style="width:30px"><input type="checkbox" class="chk" checked></th><th>회사명</th><th>지역</th><th>규모</th><th>라이선스</th><th class="num">적합도</th></tr></thead>
-          <tbody>${list.length?list.map(f=>`<tr><td><input type="checkbox" class="chk" checked></td><td><b>${f.name}</b></td><td>${f.region}</td><td>${f.size}</td><td>${f.lic?'<span class="badge ok">보유</span>':'<span class="badge warn">확인</span>'}</td><td class="num"><b>${f.fit}</b></td></tr>`).join(''):`<tr><td colspan="6" class="muted" style="padding:18px;text-align:center">조건에 맞는 후보가 없습니다. 조건을 완화해 보세요.</td></tr>`}</tbody>
+        <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
+          <thead><tr><th style="width:30px"><input type="checkbox" class="chk" checked></th><th>회사명</th><th>국가</th><th>지역</th><th>규모</th><th>라이선스</th><th class="num">적합도</th></tr></thead>
+          <tbody>${list.length?list.map(f=>`<tr><td><input type="checkbox" class="chk" checked></td><td><b>${f.name}</b></td><td>${f.country}</td><td>${f.region}</td><td>${f.size}</td><td>${f.lic?'<span class="badge ok">보유</span>':'<span class="badge warn">확인</span>'}</td><td class="num"><b>${f.fit}</b></td></tr>`).join(''):`<tr><td colspan="7" class="muted" style="padding:18px;text-align:center">조건에 맞는 후보가 없어요. 우측 AI 비서로 조건을 완화하거나 국가를 ‘전 세계 (미정)’로 바꿔보세요.</td></tr>`}</tbody>
         </table></div>
       </div></div>
       <div class="card" style="flex:1;min-width:280px;display:flex"><div class="pad" style="display:flex;flex-direction:column;flex:1;width:100%">
@@ -549,26 +901,26 @@ function vMarket(){
           <button class="btn sm" onclick="mktReset()">초기화</button>
         </div>
         <div style="display:flex;gap:8px">
-          <input class="search" id="mktInput" style="flex:1;width:auto" placeholder="예: 매출 큰 곳만 보여줘" onkeydown="if(event.key==='Enter')mktSend()">
+          <input class="search" id="mktInput" style="flex:1;width:auto" placeholder="예: 일본에서 매출 큰 곳만" onkeydown="if(event.key==='Enter')mktSend()">
           <button class="btn primary sm" onclick="mktSend()">보내기</button>
         </div>
       </div></div>
     </div>`;
-  }
   return `
-  <div class="pagehead"><div><div class="t">시장분석 · STP</div><div class="d">국내·해외 공용. 국가·지역·조건을 정해 탐색하면 아래에 결과가 나오고, AI 비서와 대화로 좁혀갑니다.</div></div></div>
+  <div class="pagehead"><div><div class="t">시장분석 · STP</div><div class="d">막연한 시장이라도 바로 탐색부터. 아래 결과를 보며 AI 비서와 대화로 국가·지역·STP 조건을 좁혀갑니다.</div></div></div>
   <div class="card"><div class="pad">
-    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:16px">
-      <div style="flex:1;min-width:200px"><div class="seclabel">국가 설정 <span class="muted" style="font-weight:400">· 전세계</span></div>
-        <select class="search" style="width:100%" onchange="mktCountry(this.value)">${opt(worldCountries,m.country)}</select></div>
-      <div style="flex:1;min-width:200px"><div class="seclabel">지역 설정 <span class="muted" style="font-weight:400">· 전체 선택 가능</span></div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">
+      <div style="flex:1;min-width:200px"><div class="seclabel">국가 <span class="muted" style="font-weight:400">· 미정이면 전 세계 탐색</span></div>
+        <select class="search" style="width:100%" onchange="mktCountry(this.value)">${opt(['전 세계 (미정)'].concat(worldCountries),m.country)}</select></div>
+      <div style="flex:1;min-width:200px"><div class="seclabel">지역 <span class="muted" style="font-weight:400">· 전체 가능</span></div>
         <select class="search" style="width:100%" onchange="mktRegion(this.value)">${opt(regions,m.region)}</select></div>
     </div>
-    <div class="seclabel">조건 (STP 타깃)</div>
-    <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px">
-      <span class="badge teal">유형: 종합병원 납품 유통사</span><span class="badge teal">취급: 캐스트·하이드로겔</span><span class="badge">+ 조건 추가</span>
+    <div class="seclabel">STP 타깃 조건 <span class="muted" style="font-weight:400">· 우측 AI 비서로 좁힙니다</span></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+      <span class="badge teal">유형: 종합병원 납품 유통사</span><span class="badge teal">취급: 캐스트·하이드로겔</span>
+      ${m.filters.includes('mid')?'<span class="badge info">중견 이상</span>':''}${m.filters.includes('lic')?'<span class="badge info">라이선스 보유</span>':''}${m.filters.includes('cast')?'<span class="badge info">캐스트 취급</span>':''}
+      <div style="flex:1"></div><button class="btn sm" onclick="mktReset()">조건 초기화</button>
     </div>
-    <button class="btn primary" onclick="mktSearch()">STP 조건으로 탐색</button>
   </div></div>
   ${results}`;
 }
@@ -667,7 +1019,13 @@ function shipVerdict(o){
   return {lab:'자동 출고의뢰', c:'ok', kind:'정상'};
 }
 function vShipping(){
-  setHead('출고 의뢰','국내영업');
+  setHead('출고 현황','국내영업');
+  const mode=state.shipMode||'의뢰';
+  const modeTabs=`<div class="card" style="margin-bottom:14px"><div class="tabs">${['의뢰','현황'].map(m=>`<button class="${m===mode?'active':''}" onclick="setShipMode('${m}')">${m==='의뢰'?'출고 의뢰':'출고현황 발송'}</button>`).join('')}</div></div>`;
+  if(mode==='현황'){ return `
+    <div class="pagehead"><div><div class="t">출고 현황</div><div class="d">언제·무엇이·얼마나 나갔는지 출고 내역을 보고, 체크해서 거래처에 발송합니다.</div></div></div>
+    ${modeTabs}
+    <div class="card"><div class="pad" style="padding-top:14px">${shipStatusSection()}</div></div>`; }
   const today=TODAY.toISOString().slice(0,10);
   const todayOrders=medOrders.filter(o=>o.kind==='주문'&&o.date===today).length;
   const shortCnt=medOrders.filter(o=>o.kind==='주문'&&!o.shipped&&o.qty>(medStock[o.code]||0)).length;
@@ -715,7 +1073,8 @@ function vShipping(){
     <div class="muted" style="font-size:12px;margin-top:10px">색상은 거래처 기본값으로 자동 입력되며, PO가 없는 건 등 예외는 수기로 처리합니다.</div>`;
   }
   return `
-  <div class="pagehead"><div><div class="t">출고 의뢰</div><div class="d">메디컬·케미컬·하이드로겔 세 분야의 출고를 분야별 탭으로 처리합니다. 상단 요약은 오늘(${today.slice(5).replace('-','/')}) 기준입니다.</div></div></div>
+  <div class="pagehead"><div><div class="t">출고 현황</div><div class="d">출고 의뢰와 출고현황 발송을 한 메뉴에서 처리합니다. 상단 요약은 오늘(${today.slice(5).replace('-','/')}) 기준입니다.</div></div></div>
+  ${modeTabs}
   <div class="kpis" style="margin-bottom:18px">
     <div class="kpi"><div class="lab">오늘 총 주문</div><div class="val">${todayOrders}건</div><div class="sub">카페24 당일 주문</div></div>
     <div class="kpi"><div class="lab">재고 부족</div><div class="val ${shortCnt?'danger':''}">${shortCnt}건</div><div class="sub">주문 수량 &gt; 보유재고</div></div>
@@ -801,7 +1160,7 @@ function histModal(){
     <div class="mh"><b>채권채무조회서 발송 기록</b><button class="x" onclick="closeModal()">×</button></div>
     <div class="mb">
       <div class="muted" style="font-size:12.5px;margin-bottom:12px">반기 정기(6월말·12월말) 발송 이력입니다. 행을 누르면 해당 회차의 대상·회신 상세를 볼 수 있습니다.</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
         <thead><tr><th>발송일</th><th class="num">대상</th><th>채널</th><th>회신 현황</th><th></th></tr></thead>
         <tbody>${hist.map(h=>`<tr class="clickable" onclick="toast('${h.date} 회차 상세 (프로토타입)')"><td><b>${h.date}</b></td><td class="num">${h.cnt}곳</td><td>${h.ch}</td><td class="muted">${h.reply}</td><td class="num"><span class="badge ${h.reply.includes('미회신 1')||h.reply.includes('미회신 2')?'warn':'ok'}">${h.reply.includes('미회신 0')?'완료':'진행'}</span></td></tr>`).join('')}</tbody>
       </table></div>
@@ -816,13 +1175,13 @@ function vQuote(){
   const now=new Date(), pad=n=>String(n).padStart(2,'0');
   const y=now.getFullYear(), m=now.getMonth()+1, d=now.getDate();
   const docno='BL-DT-'+y+pad(m)+pad(d);
-  setHead('견적서 발송','국내영업 · 견적서');
+  setHead('견적서 작성','국내영업 · 견적서');
   let qrows = sugaCommon.map(x=>({name:st.brand+' '+x.n, spec:x.spec, unit:unitOf(x.n), suga:fmt(st.brand==='NEAL'?x.sN:x.sS), price:fmt(x.p[idx])}));
   if(st.brand==='NEAL' && st.premold) qrows=qrows.concat(premoldLine.map(x=>({name:'NEAL '+x.n, spec:'', unit:'1EA', suga:x.suga!=null?fmt(x.suga):'–', price:fmt(x.price)})));
   if(st.brand==='NEAL' && st.cover) qrows=qrows.concat(coverLine.map(x=>({name:'NEAL '+x.n, spec:'', unit:'EA', suga:'비급여', price:fmt(x.price)})));
   const incl=[]; if(st.brand==='NEAL'){ if(st.premold) incl.push('프리몰드'); if(st.cover) incl.push('닐커버'); }
   return `
-  <div class="back" data-view="dom-dash">← 대시보드</div>
+  <div class="back" data-view="dom-pricing">← 보험수가표 · 견적서</div>
   <div class="card" style="margin-bottom:16px"><div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <div style="flex:1;min-width:180px"><b>견적서</b> <span class="muted">· ${st.brand} · 단가 등급 ${st.grade}${incl.length?' · '+incl.join('·')+' 포함':''}</span></div>
     <input class="search" id="quoteEmail" style="min-width:230px" placeholder="받는 사람 이메일 (다우오피스)">
@@ -896,32 +1255,80 @@ function feedbackModal(i){
 function submitFeedback(i){ returnsData[i].fb=true; closeModal(); toast('피드백처리요청서 기안 상신 — 대리점 상세 ‘클레임·품질’에 반영되었습니다'); render(); }
 function setRetYear(y){ state.retYear=y; render(); }
 function vReturns(){
-  setHead('반품 · 교환 내역','국내영업');
+  setHead('반품 · 교환 처리','국내영업');
   const filt=state.retFilter||'전체';
   const year=state.retYear||'2026';
   const years=[...new Set(returnsData.map(r=>r.date.slice(0,4)))].sort().reverse();
   const inYear=returnsData.filter(r=>r.date.slice(0,4)===year);
   let rows=returnsData.map((r,i)=>({...r,i})).filter(r=>r.date.slice(0,4)===year);
-  if(filt==='불량') rows=rows.filter(r=>r.defect);
-  else if(filt==='반품') rows=rows.filter(r=>r.type==='반품');
+  if(filt==='반품') rows=rows.filter(r=>r.type==='반품');
   else if(filt==='교환') rows=rows.filter(r=>r.type==='교환');
-  const defectCnt=inYear.filter(r=>r.defect).length;
-  const fbPending=inYear.filter(r=>r.defect&&!r.fb).length;
+  const returnCnt=inYear.filter(r=>r.type==='반품').length;
+  const exchCnt=inYear.filter(r=>r.type==='교환').length;
+  const chkN=rows.filter(r=>state.returnChk.has(r.i)).length;
+  const allOn=rows.length&&rows.every(r=>state.returnChk.has(r.i));
   return `
-  <div class="pagehead"><div><div class="t">반품 · 교환 내역</div><div class="d">국내 반품/교환 접수 내역. 불량 건은 ‘피드백처리요청서 입력’으로 다우오피스 전자결재에 자동 기안합니다.</div></div>
+  <div class="pagehead"><div><div class="t">반품 · 교환 처리</div><div class="d">국내 반품/교환 접수 내역. 행을 체크하고 ‘피드백 정보처리요청서 작성’을 누르면 다우오피스 전자결재로 넘어갑니다.</div></div>
     <select class="search" style="width:auto" onchange="setRetYear(this.value)">${years.map(y=>`<option value="${y}" ${y===year?'selected':''}>${y}년</option>`).join('')}</select></div>
   <div class="kpis" style="margin-bottom:18px">
     <div class="kpi"><div class="lab">총 내역 (${year})</div><div class="val">${inYear.length}건</div><div class="sub">반품·교환</div></div>
-    <div class="kpi"><div class="lab">불량 건 (${year})</div><div class="val ${defectCnt?'danger':''}">${defectCnt}건</div><div class="sub">피드백처리요청서 대상</div></div>
-    <div class="kpi"><div class="lab">미기안 (${year})</div><div class="val ${fbPending?'warn':''}">${fbPending}건</div><div class="sub">피드백처리요청서 미상신</div></div>
-    <div class="kpi"><div class="lab">발송 양식</div><div class="val" style="font-size:18px">다우오피스</div><div class="sub">전자결재 기안 API</div></div>
+    <div class="kpi"><div class="lab">반품</div><div class="val">${returnCnt}건</div></div>
+    <div class="kpi"><div class="lab">교환</div><div class="val">${exchCnt}건</div></div>
+    <div class="kpi"><div class="lab">선택됨</div><div class="val ${chkN?'info':''}">${chkN}건</div><div class="sub">피드백요청서 대상</div></div>
   </div>
-  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${['전체','반품','교환','불량'].map(f=>`<button class="btn" style="${f===filt?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setReturnFilter('${f}')">${f}</button>`).join('')}<div style="flex:1"></div><button class="btn" onclick="toast('엑셀 다운로드 (반품·교환 내역)')">엑셀 다운로드</button><button class="btn primary" data-view="dom-return-new">반품/교환 내역 등록</button></div>
+  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    ${['전체','반품','교환'].map(f=>`<button class="btn" style="${f===filt?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setReturnFilter('${f}')">${f}</button>`).join('')}
+    <div style="flex:1"></div>
+    <button class="btn" onclick="toast('엑셀 다운로드 (반품·교환 내역)')">엑셀 다운로드</button>
+    <button class="btn" onclick="openFeedbackDoc()">피드백 정보처리요청서 작성${chkN?' ('+chkN+')':''}</button>
+    <button class="btn primary" data-view="dom-return-new">반품/교환 등록</button>
+  </div>
   <div class="card ov"><table>
-    <thead><tr><th>일자</th><th>구분</th><th>업체명</th><th>제품</th><th class="num">수량</th><th>사유</th><th>LOT</th><th>비고</th><th>피드백처리요청서</th></tr></thead>
-    <tbody>${rows.length?rows.map(r=>`<tr><td>${r.date}</td><td>${r.type}</td><td><b>${r.agency}</b></td><td>${r.prod}</td><td class="num">${r.qty}</td><td>${r.defect?'<span class="badge danger">'+r.reason+'</span>':r.reason}</td><td class="muted">${r.lot||'—'}</td><td class="muted" style="font-size:11.5px">${r.note||''}</td><td>${r.defect?(r.fb?'<span class="badge ok">기안됨</span>':`<button class="btn sm primary" onclick="feedbackModal(${r.i})">입력</button>`):'<span class="muted">—</span>'}</td></tr>`).join(''):`<tr><td colspan="9" class="muted" style="padding:16px;text-align:center">${year}년 내역이 없습니다.</td></tr>`}</tbody>
+    <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="returnCheckAll('${year}','${filt}')"></th><th>일자</th><th>구분</th><th>업체명</th><th>제품</th><th class="num">수량</th><th>사유</th><th>LOT</th><th>비고</th><th>피드백요청서</th></tr></thead>
+    <tbody>${rows.length?rows.map(r=>`<tr><td><input type="checkbox" ${state.returnChk.has(r.i)?'checked':''} onclick="returnToggle(${r.i})"></td><td>${r.date}</td><td><span class="badge ${r.type==='교환'?'info':'muted'}">${r.type}</span></td><td><b>${r.agency}</b></td><td>${r.prod}</td><td class="num">${r.qty}</td><td>${/불량/.test(r.reason)?'<span class="badge danger">'+r.reason+'</span>':r.reason}</td><td class="muted">${r.lot||'—'}</td><td class="muted" style="font-size:11.5px">${r.note||''}</td><td>${r.fb?'<span class="badge ok">기안됨</span>':'<span class="muted">—</span>'}</td></tr>`).join(''):`<tr><td colspan="10" class="muted" style="padding:16px;text-align:center">${year}년 내역이 없습니다.</td></tr>`}</tbody>
   </table></div>
-  <div class="muted" style="font-size:12px;margin-top:10px">불량 사유(개봉전경화·실링미처리 등) 건만 ‘입력’ 버튼이 활성화됩니다. 기안된 건은 해당 대리점 상세 ‘클레임·품질’ 탭에 자동 반영됩니다.</div>`;
+  <div class="muted" style="font-size:12px;margin-top:10px">불량은 반품/교환의 한 ‘사유’로 표시됩니다(별도 구분 없음). 체크 후 ‘피드백 정보처리요청서 작성’ → 다우오피스 전자결재 상신.</div>`;
+}
+function returnToggle(i){ if(state.returnChk.has(i)) state.returnChk.delete(i); else state.returnChk.add(i); render(); }
+function returnCheckAll(year,filt){ let rows=returnsData.map((r,i)=>({...r,i})).filter(r=>r.date.slice(0,4)===year); if(filt==='반품') rows=rows.filter(r=>r.type==='반품'); else if(filt==='교환') rows=rows.filter(r=>r.type==='교환'); const allOn=rows.every(r=>state.returnChk.has(r.i)); rows.forEach(r=>allOn?state.returnChk.delete(r.i):state.returnChk.add(r.i)); render(); }
+function openFeedbackDoc(){ if(!state.returnChk.size){ toast('피드백 요청서를 작성할 내역을 체크하세요'); return; } go('dom-feedback'); }
+function feedbackSubmit(){ const n=state.returnChk.size; [...state.returnChk].forEach(i=>{ if(returnsData[i]) returnsData[i].fb=true; }); state.returnChk=new Set(); toast(n+'건 다우오피스 「피드백 정보처리요청서」 상신 완료 — 대리점 상세 ‘클레임·품질’에 반영'); go('dom-returns'); }
+function vFeedbackDoc(){
+  setHead('피드백 정보처리요청서','국내영업 · 반품·교환');
+  const items=[...state.returnChk].map(i=>returnsData[i]).filter(Boolean);
+  if(!items.length) return `<div class="back" data-view="dom-returns">← 반품 · 교환 처리</div><div class="card" style="margin-top:14px"><div class="pad muted">선택된 내역이 없습니다. 반품·교환 처리에서 체크 후 다시 시도하세요.</div></div>`;
+  const agency=items[0].agency;
+  const totalQty=items.reduce((s,r)=>s+r.qty,0);
+  return `
+  <div class="back" data-view="dom-returns">← 반품 · 교환 처리</div>
+  <div class="pagehead"><div><div class="t">피드백 정보처리요청서</div><div class="d">체크한 ${items.length}건으로 자동 작성됐어요. 확인 후 다우오피스 전자결재로 상신합니다.</div></div>
+    <button class="btn primary" onclick="feedbackSubmit()">다우오피스로 상신</button></div>
+  <div class="doc" style="max-width:780px">
+    <h2 style="letter-spacing:.1em;font-size:21px;padding:0;margin-bottom:20px">Feedback 정보처리 요청서</h2>
+    <div style="display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap;align-items:stretch">
+      <table style="flex:1;min-width:250px;margin:0"><tbody>
+        <tr><th style="width:84px;background:#EEF2F5">문서번호</th><td>영업팀-2026-00071</td></tr>
+        <tr><th style="background:#EEF2F5">기 안 일</th><td>2026-06-25(목)</td></tr>
+        <tr><th style="background:#EEF2F5">소속부서</th><td>영업팀</td></tr>
+        <tr><th style="background:#EEF2F5">기 안 자</th><td>진은명</td></tr>
+      </tbody></table>
+      <table style="flex:0 0 330px;margin:0"><thead><tr><th>팀원</th><th>팀장</th><th>이사</th><th>대표이사</th></tr></thead>
+        <tbody><tr>${['진은명','이연선','양나경','배진우'].map(n=>`<td style="text-align:center;vertical-align:top;padding:8px 4px"><div style="width:30px;height:30px;border-radius:50%;border:1.3px solid var(--danger);color:var(--danger);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;margin:0 auto">승인</div><div style="font-size:11px;margin-top:4px">${n}</div></td>`).join('')}</tr></tbody></table>
+    </div>
+    <table style="margin-bottom:14px"><tbody>
+      <tr><th style="width:84px;background:#EEF2F5">제 목</th><td colspan="3" style="text-align:center"><b>불량 검수 요청의 건 - ${agency} (260625)</b></td></tr>
+      <tr><th style="background:#EEF2F5">접수번호</th><td></td><th style="width:84px;background:#EEF2F5">접수일자</th><td>${items[0].date}</td></tr>
+      <tr><th style="background:#EEF2F5">회답부서</th><td>품질경영팀</td><th style="background:#EEF2F5">회신요청일</th><td>2026-06-30</td></tr>
+      <tr><th style="background:#EEF2F5">구 분</th><td>☑ 국내　☐ 해외</td><th style="background:#EEF2F5">업 체 명</th><td><b>${agency}</b></td></tr>
+    </tbody></table>
+    <table style="margin-bottom:14px"><caption>제품정보</caption>
+      <thead><tr><th>제품명</th><th>제조일자(LOT)</th><th class="num">출고수량</th><th class="num">불량/반품수량</th></tr></thead>
+      <tbody>${items.map(r=>`<tr><td>${r.prod}</td><td>${lotToDate(r.lot)}</td><td class="num">—</td><td class="num">${r.qty}</td></tr>`).join('')}</tbody>
+    </table>
+    <table><caption>접수내용</caption><tbody>
+      <tr><td style="line-height:1.95;padding:12px 14px">접수일: ${items[0].date}<br>회수 수량: ${totalQty}EA<br><br>[피드백 내용]<br>${[...new Set(items.map(r=>r.reason))].join(', ')}<br><br>[처리]<br>${[...new Set(items.map(r=>r.note).filter(Boolean))].join(' / ')||'접수 후 처리 진행'}<br><br>[소견]<br>해당 LOT 생산 조건 점검 후 품질경영팀 회신 예정.</td></tr>
+    </tbody></table>
+  </div>`;
 }
 function vReturnNew(){
   setHead('반품/교환 내역 등록','국내영업');
@@ -975,31 +1382,42 @@ const ledgerTargets={
 const ledgerTabs=['원장','출고현황','채권채무조회서'];
 const fmtBadge=f=>({'엑셀':'ok','PDF':'info','둘다':'teal'}[f]||'muted');
 function setLedgerTab(t){ state.ledgerTab=t; render(); }
+function ledgerUpload(input, kind){ const f=input.files&&input.files[0]; if(!f) return; toast('영림원에서 내보낸 '+kind+' 엑셀 ‘'+f.name+'’ 업로드 완료 — 거래처별 금액에 반영(반자동)'); input.value=''; }
 function ledgerToggle(k){ const y=window.scrollY; if(state.ledgerChk.has(k)) state.ledgerChk.delete(k); else state.ledgerChk.add(k); render(); window.scrollTo(0,y); }
 function ledgerCheckAll(group){ const y=window.scrollY; const keys=ledgerTargets[group].map(t=>group+'::'+t.name); const allOn=keys.every(k=>state.ledgerChk.has(k)); keys.forEach(k=>{ allOn?state.ledgerChk.delete(k):state.ledgerChk.add(k); }); render(); window.scrollTo(0,y); }
 function ledgerSet(group,name,field,val){ const y=window.scrollY; const it=ledgerTargets[group].find(t=>t.name===name); if(it) it[field]=val; render(); window.scrollTo(0,y); }
-function ledgerSend(group){ const sel=[...state.ledgerChk].filter(k=>k.startsWith(group+'::')); if(!sel.length){ toast('발송할 거래처를 선택하세요'); return; } const faxN=sel.filter(k=>{const n=k.split('::')[1]; const it=ledgerTargets[group].find(t=>t.name===n); return it&&it.via==='팩스';}).length; toast(group+' '+sel.length+'개사 발송 — 팩스 '+faxN+' / 메일 '+(sel.length-faxN)+' (각 거래처 형식·경로 적용)'); }
+function ledgerSend(group){
+  const sel=[...state.ledgerChk].filter(k=>k.startsWith(group+'::'));
+  if(!sel.length){ toast('발송할 거래처를 선택하세요'); return; }
+  const faxN=sel.filter(k=>{const n=k.split('::')[1]; const it=ledgerTargets[group].find(t=>t.name===n); return it&&it.via==='팩스';}).length;
+  const retry={}; sel.forEach(k=>{ retry[k]=state.ledgerStatus[k]==='실패'; state.ledgerStatus[k]='전송중'; });
+  toast(group+' '+sel.length+'개사 발송 중… (하나팩스 '+faxN+' / 다우오피스 메일 '+(sel.length-faxN)+')'); render();
+  setTimeout(function(){ var ok=0,fail=0; sel.forEach(function(k,i){ var s=retry[k]?true:(i%5!==4); state.ledgerStatus[k]=s?'성공':'실패'; if(s){state.ledgerChk.delete(k);ok++;}else fail++; }); render(); toast(group+' 발송 완료 — 성공 '+ok+(fail?(' / 실패 '+fail+' (재발송하면 성공)'):'')); }, 1000);
+}
 function vLedger(){
-  setHead('출고현황 · 원장 발송','국내영업');
+  const isShip = state.view==='dom-shipstatus';
+  const tabsHere = isShip ? ['출고현황'] : ['원장','채권채무조회서'];
+  if(!tabsHere.includes(state.ledgerTab)) state.ledgerTab=tabsHere[0];
+  setHead(isShip?'출고현황 발송':'원장 · 채권채무조회서 발송','국내영업');
   const now=new Date(); const mLabel=(now.getMonth()+1)+'월';
-  const tab=state.ledgerTab||'원장';
+  const tab=state.ledgerTab;
   const list=ledgerTargets[tab];
   const keys=list.map(t=>tab+'::'+t.name);
   const allOn=keys.every(k=>state.ledgerChk.has(k));
   const selN=keys.filter(k=>state.ledgerChk.has(k)).length;
   const isRecv=tab==='채권채무조회서';
-  const desc={'원장':'매달 원장 — 매출 마감 후 발송. 거래처별 파일형식(엑셀/PDF/둘다)·전송방법(팩스/메일)·경로가 다릅니다.','출고현황':'매달 출고현황 — 월말 발송. 거래처별 파일형식·전송방법·경로 적용.','채권채무조회서':'반기말(6/30·12/31) 기준 잔액 보유 거래처에 발송(대리점 관리에서 이동). 회신처 FAX 031-629-5216.'}[tab];
+  const desc={'원장':'매달 원장 — 매출 마감 후 발송. 거래처별 파일형식(엑셀/PDF/둘다)·전송방법(팩스/메일)·경로가 다릅니다.','출고현황':'매달 출고현황 — 월말 발송. 거래처별 파일형식·전송방법·경로 적용.','채권채무조회서':'반기말(6/30·12/31) 기준 잔액 보유 거래처에 발송(미수금 관리에서 이동). 회신처 FAX 031-629-5216.'}[tab];
   return `
-  <div class="pagehead"><div><div class="t">출고현황 · 원장 발송</div><div class="d">원장·출고현황·채권채무조회서를 탭으로 나눠 발송합니다. 파일형식(엑셀/PDF/둘다)은 ‘보내는 파일’, 팩스/메일은 ‘보내는 방법’이며 거래처별로 다릅니다.</div></div></div>
-  <div class="card"><div class="tabs" id="ledgerTabs">${ledgerTabs.map(t=>`<button class="${t===tab?'active':''}" onclick="setLedgerTab('${t}')">${t}</button>`).join('')}</div>
-  <div class="pad" style="padding-top:8px">
+  <div class="pagehead"><div><div class="t">${isShip?'출고현황 발송':'원장 · 채권채무조회서 발송'}</div><div class="d">${isShip?'매달 출고현황을 거래처별 파일형식(엑셀/PDF/둘다)·전송방법(팩스/메일)·경로로 발송합니다.':'원장·채권채무조회서를 탭으로 나눠 발송합니다. 파일형식(엑셀/PDF/둘다)은 ‘보내는 파일’, 팩스/메일은 ‘보내는 방법’이며 거래처별로 다릅니다.'}</div></div></div>
+  <div class="card">${tabsHere.length>1?`<div class="tabs" id="ledgerTabs">${tabsHere.map(t=>`<button class="${t===tab?'active':''}" onclick="setLedgerTab('${t}')">${t}</button>`).join('')}</div>`:''}
+  <div class="pad" style="padding-top:${tabsHere.length>1?'8px':'14px'}">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <span class="badge teal">${isRecv?'기준 '+now.getFullYear()+'년 반기말':'기준 '+now.getFullYear()+'년 '+mLabel+' 마감'}</span>
       <span class="muted" style="font-size:12px">${desc}</span>
       <div style="flex:1"></div>
-      <button class="btn" onclick="toast('${isRecv?'반기 잔액 불러오기 (영림원 ERP)':'이번 달 마감 데이터 불러오기 (영림원 ERP 엑셀 반자동)'}')">${isRecv?'잔액 불러오기':'마감 데이터 불러오기'}</button>
+      <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="ledgerUpload(this,'${isRecv?'잔액':'마감 자료'}')">${isRecv?'잔액 업로드 (엑셀)':'마감 자료 업로드 (엑셀)'}</label>
     </div>
-    <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+    <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
       <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="ledgerCheckAll('${tab}')"></th><th>거래처</th><th>등급</th>${isRecv?'<th class="num">미수 잔액</th>':'<th>특이</th>'}<th>파일형식</th><th>전송방법</th><th>경로</th></tr></thead>
       <tbody>${list.map(t=>{const k=tab+'::'+t.name; return `<tr>
         <td><input type="checkbox" ${state.ledgerChk.has(k)?'checked':''} onclick="ledgerToggle('${k}')"></td>
@@ -1120,7 +1538,7 @@ function vOvDash(){
   <div class="row">
     <div class="card" style="flex:1.4;min-width:330px"><div class="pad">
       <div class="seclabel">재주문 알림 (주문 주기 기준)</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
         <thead><tr><th>거래처</th><th class="num">평균 주기</th><th class="num">경과</th><th>상태</th><th></th></tr></thead>
         <tbody>${reorder.length?reorder.map(a=>{const due=a.lastDays>=a.cycle; return `<tr><td><b>${a.name}</b><div class="muted" style="font-size:11px">${a.country}</div></td><td class="num">${a.cycle}일</td><td class="num">${a.lastDays}일</td><td><span class="badge ${due?'danger':'warn'}">${due?'재주문 도래':'임박'}</span></td><td class="num"><button class="btn sm" data-view="ov-agencies">거래처 보기</button></td></tr>`;}).join(''):'<tr><td colspan="5" class="muted" style="padding:14px;text-align:center">재주문 임박 거래처 없음</td></tr>'}</tbody>
       </table></div>
@@ -1133,7 +1551,7 @@ function vOvDash(){
   </div>
   <div class="card" style="margin:18px 0"><div class="pad">
     <div class="seclabel">PI 입금 현황 (선금 30 / 잔금 70)</div>
-    <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+    <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
       <thead><tr><th>PI No.</th><th>거래처</th><th class="num">금액</th><th>선금</th><th>잔금</th><th>단계</th></tr></thead>
       <tbody>${orders.map(o=>`<tr><td><b>${o.pi}</b></td><td>${o.agency}<div class="muted" style="font-size:11px">${o.country}</div></td><td class="num">${ovMoney(o.amount,o.cur)}</td><td>${payBadge(o.dep)}</td><td>${payBadge(o.bal)}</td><td><span class="badge ${o.stage==='정산'?'ok':o.stage==='PI 발행'?'muted':'info'}">${o.stage}</span></td></tr>`).join('')}</tbody>
     </table></div>
@@ -1224,7 +1642,7 @@ function vOvOrders(){
     <div class="card" style="flex:1;min-width:300px"><div class="pad">
       <div class="seclabel">PI 자동 생성</div>
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;margin-bottom:8px"><div><b>${sel.pi.no}</b> · ${sel.pi.inco} · ${sel.pi.cur}</div><div>${sel.matched?'<span class="badge ok">자동 인식 완료</span>':'<span class="badge danger">미매칭 있음</span>'}</div></div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
         <thead><tr><th>코드 (매핑)</th><th>품명</th><th class="num">수량</th><th>색상</th></tr></thead>
         <tbody>${sel.pi.lines.map(l=>`<tr><td style="font-size:11.5px">${l[0]}</td><td>${l[1]}</td><td class="num">${fmt(l[2])}</td><td>${l[3]==='?'?'<span class="badge warn">확인</span>':l[3]}</td></tr>`).join('')}</tbody>
       </table></div>
@@ -1256,7 +1674,7 @@ function vOvAgencies(){
   <div class="row">
     <div class="card" style="flex:1.6;min-width:340px"><div class="pad">
       <div class="seclabel">거래처 리스트</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
         <thead><tr><th>거래처</th><th>국가</th><th>인코텀즈</th><th>결제</th><th>통화</th><th>진행 PI</th></tr></thead>
         <tbody>${list.length?list.map(a=>{const ors=ovOrders.filter(o=>o.agency===a.name); return `<tr class="clickable" onclick="ovStatement('${a.id}')"><td><b>${a.name}</b></td><td>${a.country}</td><td><span class="badge muted">${a.inco}</span></td><td>${a.pay}</td><td>${a.cur}</td><td>${ors.length}건</td></tr>`;}).join(''):'<tr><td colspan="6" class="muted" style="padding:14px;text-align:center">해당 분야 거래처 없음</td></tr>'}</tbody>
       </table></div>
@@ -1274,7 +1692,7 @@ function ovStatement(id){
   openModal(`<div class="mh"><b>${a.name} · 정산 현황</b><button class="x" onclick="closeModal()">×</button></div>
     <div class="mb">
       <div class="muted" style="font-size:12.5px;margin-bottom:12px">${a.country} · ${a.inco} · ${a.pay} · ${a.cur}</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px"><table>
+      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
         <thead><tr><th>PI No.</th><th class="num">금액</th><th>선금 30%</th><th>잔금 70%</th><th>단계</th></tr></thead>
         <tbody>${ors.length?ors.map(o=>`<tr><td><b>${o.pi}</b></td><td class="num">${ovMoney(o.amount,o.cur)}</td><td>${payBadge(o.dep)}</td><td>${payBadge(o.bal)}</td><td class="muted">${o.stage}</td></tr>`).join(''):'<tr><td colspan="5" class="muted" style="padding:12px;text-align:center">진행 PI 없음</td></tr>'}</tbody>
       </table></div>
@@ -1354,20 +1772,62 @@ function vOvDocs(){
 
 function render(){
   const c=document.getElementById('content');
-  const map={ 'dom-dash':vDomDash,'dom-agencies':vAgencies,'dom-pipeline':vPipeline,'agency':vAgencyDetail,
-    'dom-shipping':vShipping,'dom-returns':vReturns,'dom-return-new':vReturnNew,'dom-ledger':vLedger,'dom-followup':vFollowup,'cert-hub':vCertHub,'quote':vQuote,
+  const map={ 'home':vHome, 'dom-dash':vDomDash,'dom-agencies':vAgencies,'dom-clients':vClients,'dom-pipeline':vPipeline,'agency':vAgencyDetail,
+    'dom-shipping':vShipping,'dom-returns':vReturns,'dom-return-new':vReturnNew,'dom-ledger':vLedger,'dom-shipstatus':vLedger,'dom-pricing':vPricing,'dom-contracts':vContracts,'dom-feedback':vFeedbackDoc,'dom-followup':vFollowup,'cert-hub':vCertHub,'quote':vQuote,
     'ov-dash':vOvDash,'ov-pricelist':vOvPricelist,'ov-orders':vOvOrders,'ov-agencies':vOvAgencies,'ov-shipping':vOvShipping,'ov-docs':vOvDocs,
     'disc-dash':vDiscDash,'disc-leads':vDiscLeads,'disc-market':vMarket,'disc-search':vSearch,'lead':vLeadDetail,'proposal':vProposal,'doc':vDoc };
   c.innerHTML=(map[state.view]||vDomDash)();
   c.scrollTop=0;
   const ch=document.getElementById('mktChat'); if(ch) ch.scrollTop=ch.scrollHeight;
-  // active nav
-  document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active', a.dataset.view===state.view));
+  // active nav (하위 화면은 부모 메뉴를 켬)
+  const navParent={ 'dom-return-new':'dom-returns','dom-feedback':'dom-returns',
+    'agency':'dom-agencies','doc':'dom-agencies','quote':'dom-pricing',
+    'lead':'disc-leads','proposal':'disc-leads' };
+  const activeView=navParent[state.view]||state.view;
+  document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active', a.dataset.view===activeView));
+  // 열린 화면 탭바
+  const tb=document.getElementById('tabbar');
+  if(tb){ tb.innerHTML=state.tabs.map(t=>`<div class="tab ${t.id===state.activeTab?'active':''} ${t.view==='dom-dash'?'home':''} ${navParent[t.view]?'':'pri'}" data-tabid="${t.id}"><span class="lb">${t.label}</span>${t.view==='dom-dash'?'':`<span class="x" data-closetab="${t.id}" title="닫기">×</span>`}</div>`).join(''); }
 }
-function go(v){ state.view=v; render(); }
+const TAB_LABELS={ home:'메인 화면','dom-dash':'대시보드','dom-agencies':'미수금 관리','dom-clients':'거래처 등록','dom-shipping':'출고 현황','dom-returns':'반품 · 교환 처리','dom-return-new':'반품 등록','dom-ledger':'원장 · 채권채무조회서 발송','dom-shipstatus':'출고현황 발송','dom-pricing':'보험수가표 · 견적서','dom-contracts':'계약 관리','dom-feedback':'피드백 요청서','dom-followup':'Follow-up','dom-pipeline':'파이프라인','quote':'견적서 작성','cert-hub':'인증·규제 허브',
+  'ov-dash':'해외 현황','ov-pricelist':'신규 고객','ov-orders':'수주·생산','ov-agencies':'해외 거래처','ov-shipping':'선적·물류','ov-docs':'수출서류',
+  'disc-dash':'발굴 동선','disc-leads':'잠재 거래처','disc-market':'시장분석','disc-search':'탐색','proposal':'제안서 작성' };
+function tabMeta(v){
+  if(v==='agency'){ const a=findAgency(state.agency); return {id:'agency:'+state.agency, label:(a?a.name:'거래처')+' 상세', ctx:{agency:state.agency, aTab:state.aTab}}; }
+  if(v==='lead'){ const l=leads.find(x=>x.id===state.lead); return {id:'lead:'+state.lead, label:(l?l.name:'리드')+' 상세', ctx:{lead:state.lead}}; }
+  if(v==='doc'){ return {id:'doc:'+(state.docAgency||''), label:'채권채무조회서', ctx:{docAgency:state.docAgency}}; }
+  return {id:v, label:TAB_LABELS[v]||v, ctx:null};
+}
+function go(v){
+  state.view=v;
+  const m=tabMeta(v);
+  const t=state.tabs.find(x=>x.id===m.id);
+  if(t){ t.label=m.label; t.ctx=m.ctx; t.view=v; }
+  else state.tabs.push({id:m.id, view:v, label:m.label, ctx:m.ctx});
+  state.activeTab=m.id;
+  render();
+}
+function activateTab(id){
+  const t=state.tabs.find(x=>x.id===id); if(!t) return;
+  if(t.ctx) Object.assign(state, t.ctx);
+  state.view=t.view; state.activeTab=id; render();
+}
+function closeTab(id){
+  const i=state.tabs.findIndex(x=>x.id===id); if(i<0) return;
+  const wasActive=state.activeTab===id;
+  state.tabs.splice(i,1);
+  if(!state.tabs.length){ go('dom-dash'); return; }
+  if(wasActive) activateTab(state.tabs[Math.max(0,i-1)].id);
+  else render();
+}
 
 /* ---------------- events ---------------- */
 document.getElementById('nav').addEventListener('click',e=>{ const a=e.target.closest('a'); if(a){ go(a.dataset.view);} });
+document.getElementById('brand').addEventListener('click',()=>go('dom-dash'));
+document.getElementById('tabbar').addEventListener('click',e=>{
+  const close=e.target.closest('[data-closetab]'); if(close){ e.stopPropagation(); closeTab(close.dataset.closetab); return; }
+  const tab=e.target.closest('[data-tabid]'); if(tab) activateTab(tab.dataset.tabid);
+});
 document.getElementById('content').addEventListener('click',e=>{
   const nav=e.target.closest('[data-view]'); if(nav){ go(nav.dataset.view); return; }
   const back=e.target.closest('[data-back]'); if(back){ go(back.dataset.back==='agency'?'agency':'dom-agencies'); return; }

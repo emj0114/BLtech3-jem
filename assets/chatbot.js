@@ -79,6 +79,10 @@ function botAsk(q){
     body:JSON.stringify({ messages: state.bot.msgs })
   })
   .then(async r=>{ const d=await r.json().catch(()=>({}));
+    if(r.status===404 || r.status===501){
+      // Hosting 만 배포된 상태 — 챗봇 백엔드(Cloud Functions)가 아직 없음
+      throw new Error('챗봇 서버가 아직 배포되지 않았습니다. 현재는 화면만 배포된 상태이고, 챗봇은 로컬(localhost:8000)에서 동작합니다.');
+    }
     if(!r.ok) throw new Error(d.message || ('서버 오류 ('+r.status+')')); return d; })
   .then(d=>{ state.bot.msgs.push({role:'assistant', content:d.reply}); if(!state.bot.open) state.bot.unread=true; })
   .catch(e=>{ state.bot.error = e.message || '요청에 실패했습니다.'; })

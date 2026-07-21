@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>BL TECH 영업 포털 (초안)</title>
+<title>BL TECH 해외영업 포털 (초안)</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <link rel="stylesheet" href="assets/styles.css?v=32">
 </head>
@@ -15,7 +15,7 @@
   <aside class="side" id="side">
     <div class="brand" id="brand" style="cursor:pointer" title="대시보드로">
       <div class="logo">BL</div>
-      <div><b>BL TECH</b><span>영업 포털 · 초안</span></div>
+      <div><b>BL TECH</b><span>영업 포털 · 해외</span></div>
     </div>
     <nav class="nav" id="nav"></nav>
     <div class="foot" id="foot"></div>
@@ -26,12 +26,12 @@
       <button class="iconbtn" id="menuBtn" style="display:none">≡</button>
       <div>
         <h1 id="ttl">대시보드</h1>
-        <div class="crumb" id="crumb">국내영업</div>
+        <div class="crumb" id="crumb">해외영업</div>
       </div>
       <div class="spacer"></div>
-      <input class="search" placeholder="거래처·리드 검색">
+      <input class="search" placeholder="바이어·오더 검색">
       <button class="iconbtn" title="알림"><svg width="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg><span class="dot"></span></button>
-      <div class="avatar">영</div>
+      <div class="avatar">해</div>
     </div>
     <div class="tabbar" id="tabbar"></div>
     <div class="content" id="content"></div>
@@ -41,9 +41,10 @@
 <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
 
-<script>window.PORTAL_ID='domestic';</script>
+<script>window.PORTAL_ID='overseas';</script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="assets/app.js?v=32"></script>
 <script src="assets/chatbot.js?v=32"></script>
+<script src="assets/overseas.js?v=32"></script>
 </body>
 </html>

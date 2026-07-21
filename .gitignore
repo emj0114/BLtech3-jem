@@ -13,6 +13,18 @@ Thumbs.db
 # Node (only if tooling is added later)
 node_modules/
 
+# 비밀키 — 절대 커밋 금지 (.env.example 만 커밋합니다)
+.env
+.env.*
+!.env.example
+
+# Firebase 서비스 계정 키 (Admin SDK) — 프로젝트 전체 권한이라 유출되면 치명적
+*-firebase-adminsdk-*.json
+serviceAccountKey*.json
+*service-account*.json
+.firebase/
+firebase-debug.log
+
 # Vercel
 .vercel
 

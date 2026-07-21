@@ -123,16 +123,111 @@ function mktSend(){ const inp=document.getElementById('mktInput'); const v=(inp&
   m.chat.push({r:'ai',t: ap.length?`${ap.join(', ')} 조건을 반영했어요. 현재 후보 ${mktList().length}곳입니다.`:`현재 후보 ${mktList().length}곳입니다. 매출 규모·판매 라이선스·취급 품목으로 더 좁힐 수 있어요.`}); render(); }
 
 /* ---------------- state ---------------- */
+/* ============================================================
+   포털 분리 — 국내영업 / 해외영업
+     index.html     → window.PORTAL_ID='domestic'   (app.js 만 로드)
+     overseas.html  → window.PORTAL_ID='overseas'   (app.js + overseas.js)
+   공통 셸(state·helpers·render·탭바·이벤트)은 app.js 하나를 공유하고,
+   화면(VIEWS)과 메뉴(nav)만 포털별로 갈아끼웁니다.
+   ============================================================ */
+const ROLES=['관리자','국내영업','해외영업','조회전용'];
+const ICONS={
+  search:'<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
+  shield:'<path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/>',
+  chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+};
+// roles 가 있으면 그 역할만 메뉴가 보입니다(금액 민감 화면 등).
+const PORTALS={
+  domestic:{ id:'domestic', name:'BL TECH', sub:'영업 포털 · 국내', home:'dom-dash',
+    roles:['관리자','국내영업','조회전용'], allow:['dom-','disc-','agency','doc','quote','lead','proposal','home','cert-hub'],
+    nav:[ {grp:'고객 발굴 센터'}, {v:'disc-dash',t:'발굴 동선 · 대시보드',icon:'search'}, {v:'disc-market',t:'시장분석 · STP',sub:1}, {v:'disc-leads',t:'잠재 거래처 리스트',sub:1},
+          {grp:'국내영업'}, {v:'dom-dash',t:'대시보드',icon:'grid'}, {v:'dom-shipping',t:'출고 현황',sub:1}, {v:'dom-clients',t:'거래처 등록',sub:1},
+          {v:'dom-agencies',t:'미수금 관리',sub:1,roles:['관리자','국내영업']}, {v:'dom-returns',t:'반품 · 교환 처리',sub:1},
+          {v:'dom-pricing',t:'보험수가표 · 견적서',sub:1}, {v:'dom-contracts',t:'계약 관리',sub:1,roles:['관리자','국내영업']},
+          {grp:'공통'}, {v:'cert-hub',t:'인증·규제 허브',icon:'shield'} ] },
+  overseas:{ id:'overseas', name:'BL TECH', sub:'영업 포털 · 해외', home:'ov-dash',
+    roles:['관리자','해외영업','조회전용'], allow:['ov-','cert-hub'],
+    nav:[ {grp:'해외영업'}, {v:'ov-dash',t:'대시보드',icon:'globe'}, {v:'ov-pricelist',t:'신규 고객',sub:1}, {v:'ov-orders',t:'수주 · 생산',sub:1},
+          {v:'ov-agencies',t:'거래처 관리',sub:1}, {v:'ov-shipping',t:'선적 · 물류',sub:1}, {v:'ov-docs',t:'수출서류',sub:1},
+          {grp:'공통'}, {v:'cert-hub',t:'인증·규제 허브',icon:'shield'} ] },
+};
+const PORTAL = PORTALS[window.PORTAL_ID] || PORTALS.domestic;
+const OTHER  = PORTAL.id==='domestic' ? PORTALS.overseas : PORTALS.domestic;
+const VIEWS  = {};   // 각 포털 스크립트가 자기 화면을 등록합니다
+function roleOk(item){ return !item.roles || item.roles.includes(state.role); }
+function portalOk(){ return PORTAL.roles.includes(state.role); }
+function allowedView(v){ return PORTAL.allow.some(p=>v===p||v.startsWith(p)); }
+/* 메뉴에서 숨기는 것만으로는 부족 — 대시보드 KPI·본문 링크로도 들어올 수 있으므로
+   라우팅 단계에서 한 번 더 막습니다. (Firestore Rules 가 최종 방어선) */
+const VIEW_ROLES={};
+PORTAL.nav.forEach(it=>{ if(it.v&&it.roles) VIEW_ROLES[it.v]=it.roles; });
+const VIEW_PARENT={ 'dom-ledger':'dom-agencies','dom-shipstatus':'dom-agencies','doc':'dom-agencies','agency':'dom-agencies','dom-followup':'dom-agencies' };
+function viewRoleOk(v){ const r=VIEW_ROLES[v]||VIEW_ROLES[VIEW_PARENT[v]]; return !r || r.includes(state.role); }
+
+/* ============================================================
+   [1] 영구 저장 대상  →  Firestore 이관 예정
+   새로고침·재로그인 후에도 남아야 하는 "업무 데이터".
+   주석의 화살표가 Firestore 컬렉션/문서 매핑 계획입니다.
+   ※ 원장·미수 금액 원본은 여기 넣지 않습니다(원본=영림원). FILE_POLICY 참고.
+   ============================================================ */
+let data = {
+  journal:[],           // → journal/{id}          영업 일지
+  userAlerts:[],        // → alerts/{id}           알림
+  ledgerStatus:{},      // → sendStatus/ledger      원장·채권채무조회서 발송 상태
+  shipStatus:{},        // → sendStatus/shipping    출고현황 발송 상태
+  recvFollowups:[ {agency:'한백', note:'30일 초과 — 채권채무조회 대상', status:'미회수'}, {agency:'대성 메디칼', note:'D-9 갱신 협의 통화 예정', status:'미회수'}, {agency:'부산 정형', note:'정기 접촉 미접촉 21일', status:'미회수'} ], // → followups/{id}
+  sugaSource:{ label:'2026-04-27 고시 기준', xls:null, rates:null, report:null }, // → priceTables/suga  업로드 반영본
+  quoteUpload:null,     // → Storage 참조(견적서 증빙)
+};
+
+/* ============================================================
+   [2] UI 임시 상태  →  저장하지 않음
+   열린 탭·체크박스·필터·정렬 등 "화면 상태"만.
+   Firestore에 넣지 말 것 (넣으면 쓰기 과금만 늘고 의미 없음).
+   ============================================================ */
 let state = { view:'dom-dash', tabs:[{id:'dom-dash',view:'dom-dash',label:'대시보드',ctx:null}], activeTab:'dom-dash', clientSel:undefined, clientNew:false, clientOcr:null,
-  journal:[], userAlerts:[], recvTab:'미수 현황', shipMode:'의뢰', shipChk:new Set(), shipFilter:'전체', returnChk:new Set(), ledgerStatus:{}, shipStatus:{},
-  recvFollowups:[ {agency:'한백', note:'30일 초과 — 채권채무조회 대상', status:'미회수'}, {agency:'대성 메디칼', note:'D-9 갱신 협의 통화 예정', status:'미회수'}, {agency:'부산 정형', note:'정기 접촉 미접촉 21일', status:'미회수'} ],
+  role:'관리자',
+  recvTab:'미수 현황', shipMode:'의뢰', shipChk:new Set(), shipFilter:'전체', returnChk:new Set(),
   domField:'메디컬', ovField:'메디컬', fxRange:'1M', shipCase:'fob-customer', shipAgency:'o1', ovSelPO:0, ovPreview:null, plMode:'기존', agency:null, aTab:'개요', lead:null, checked:new Set(), docAgency:null, shipTab:'메디컬', ledgerChk:new Set(), narrowed:false,
   market:{ country:'전 세계 (미정)', region:'전체', searched:true, filters:[], chat:[] },
   suga:{ brand:'NEAL', grade:'A', premold:true, cover:true } };
 
+/* ============================================================
+   파일 업로드 정책 — 목적에 따라 보관 여부가 다릅니다.
+   Firebase Storage에 "쌓이기만 하는 파일"을 막기 위한 기준.
+   ============================================================ */
+const FILE_POLICY = {
+  extract: { badge:'추출용', note:'수치만 반영하고 원본은 보관하지 않습니다', keep:false },
+  keep:    { badge:'증빙 보관', note:'증빙으로 보관됩니다', keep:true },
+};
+function uploadBadge(kind){ const p=FILE_POLICY[kind]; return `<span class="badge ${kind==='extract'?'muted':'teal'}" style="margin-left:6px">${p.badge}</span>`; }
+
+/* 원장의 주인(system of record)은 영림원.
+   포털은 원장을 복제하지 않고 "발송 대상 + 발송 상태"만 관리합니다.
+   → Firestore 문서 폭증·읽기 과금을 막는 핵심 원칙. */
+/* 출고 진행·출하완료는 공유 수주~출고 시스템이 주인.
+   포털이 상태를 입력·추적하지 않고 조회만 합니다. */
+function shipReadonlyNotice(){
+  return `<div style="display:flex;align-items:flex-start;gap:9px;background:var(--surface-2);border:1px solid var(--border);border-left:3px solid var(--ink-2);border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:12.5px;line-height:1.6">
+    <svg width="15" viewBox="0 0 24 24" fill="none" stroke="var(--ink-2)" stroke-width="2" style="flex:0 0 15px;margin-top:2px"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7"/><circle cx="12" cy="12" r="3"/></svg>
+    <div><b>조회 전용 화면입니다.</b> 재고 판정·출고 진행·<b>출하완료</b>는 수주~출고 시스템(생산·구매·출고팀)에서 관리해요. 이 포털은 주문 내역을 <b>보기만</b> 하고 상태를 바꾸지 않습니다.</div>
+  </div>`;
+}
+
+function sorNotice(){
+  return `<div style="display:flex;align-items:flex-start;gap:9px;background:var(--surface-2);border:1px solid var(--border);border-left:3px solid var(--teal);border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:12.5px;line-height:1.6">
+    <svg width="15" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2" style="flex:0 0 15px;margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+    <div><b>금액 원본은 영림원(ERP)입니다.</b> 이 화면은 <b>발송 대상과 발송 상태</b>만 관리해요. 잔액·마감 수치는 엑셀 업로드로 반영되며, 포털이 원장을 따로 보관하지 않습니다.</div>
+  </div>`;
+}
+
 /* ---------------- helpers ---------------- */
 const gradeBadge = g => { const c={'A+':'teal','A':'info','B':'warn','C':'muted'}[g]||'muted'; return `<span class="badge ${c}">${g}</span>`; };
 function setHead(t,c){ document.getElementById('ttl').textContent=t; document.getElementById('crumb').textContent=c; }
+// 사용자·외부 응답 문자열을 HTML에 넣을 때 (챗봇 답변 등) — XSS 방지
+function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(msg){ const t=document.getElementById('toast'); t.innerHTML='<svg width="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>'+msg; t.classList.add('show'); clearTimeout(window._tt); window._tt=setTimeout(()=>t.classList.remove('show'),2600); }
 function openModal(html){ document.getElementById('modal').innerHTML=html; document.getElementById('modalBg').classList.add('show'); }
 function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
@@ -142,39 +237,74 @@ const sugaGrades=['A+','A','B','C']; const sugaGi={'A+':0,'A':1,'B':2,'C':3};
 const sugaRate={'A+':'23%','A':'25%','B':'27%','C':'30%'};
 // 단가(견적가)는 NEAL·SMILE 동일. p=[A+,A,B,C]. sN/sS = 2026-04-27 보험수가(브랜드별)
 const sugaCommon=[
-  {n:'Cast', spec:'2"',         p:[1200,1300,1400,1500],      sN:5250,  sS:5250},
-  {n:'Cast', spec:'3"',         p:[1700,1800,2000,2200],      sN:7590,  sS:7590},
-  {n:'Cast', spec:'4"',         p:[1900,2100,2200,2500],      sN:8620,  sS:8620},
-  {n:'Cast', spec:'5"',         p:[2000,2100,2300,2600],      sN:8840,  sS:8840},
-  {n:'Splint (Roll)', spec:'2" × 4.5m', p:[27800,30200,32700,36300], sN:128050, sS:128050},
-  {n:'Splint (Roll)', spec:'3" × 4.5m', p:[33700,36700,39600,44000], sN:155300, sS:155300},
-  {n:'Splint (Roll)', spec:'4" × 4.5m', p:[35500,38600,41700,46300], sN:163320, sS:163320},
-  {n:'Splint (Roll)', spec:'5" × 4.5m', p:[38700,42100,45400,50500], sN:178340, sS:178340},
-  {n:'Splint (Roll)', spec:'6" × 4.5m', p:[49800,54100,58400,64900], sN:229180, sS:229180},
-  {n:'Splint (Pre-Cut)', spec:'2" × 12"', p:[3400,3700,4000,4400],   sN:15330, sS:15580},
-  {n:'Splint (Pre-Cut)', spec:'3" × 14"', p:[3800,4100,4400,4900],   sN:17070, sS:17070},
-  {n:'Splint (Pre-Cut)', spec:'3" × 40"', p:[6000,6500,7000,7800],   sN:27300, sS:27300},
-  {n:'Splint (Pre-Cut)', spec:'4" × 18"', p:[4500,4900,5200,5800],   sN:20360, sS:20360},
-  {n:'Splint (Pre-Cut)', spec:'4" × 34"', p:[6000,6500,7000,7800],   sN:27300, sS:27300},
-  {n:'Splint (Pre-Cut)', spec:'5" × 34"', p:[7100,7800,8400,9300],   sN:32680, sS:32680},
-  {n:'Splint (Pre-Cut)', spec:'5" × 50"', p:[10700,11600,12600,14000], sN:49130, sS:49130},
-  {n:'Splint (Pre-Cut)', spec:'6" × 34"', p:[7100,7800,8400,9300],   sN:32680, sS:32680},
-  {n:'Splint (Pre-Cut)', spec:'6" × 50"', p:[13100,14300,15400,17100], sN:60300, sS:60300},
+  {code:'8502028', n:'Cast', spec:'2"',         p:[1200,1300,1400,1500],      sN:5250,  sS:5250},
+  {code:'8503028', n:'Cast', spec:'3"',         p:[1700,1800,2000,2200],      sN:7590,  sS:7590},
+  {code:'8504028', n:'Cast', spec:'4"',         p:[1900,2100,2200,2500],      sN:8620,  sS:8620},
+  {code:'8505028', n:'Cast', spec:'5"',         p:[2000,2100,2300,2600],      sN:8840,  sS:8840},
+  {code:'8400028', n:'Splint (Roll)', spec:'2" × 4.5m', p:[27800,30200,32700,36300], sN:128050, sS:128050},
+  {code:'8402028', n:'Splint (Roll)', spec:'3" × 4.5m', p:[33700,36700,39600,44000], sN:155300, sS:155300},
+  {code:'8403028', n:'Splint (Roll)', spec:'4" × 4.5m', p:[35500,38600,41700,46300], sN:163320, sS:163320},
+  {code:'8404028', n:'Splint (Roll)', spec:'5" × 4.5m', p:[38700,42100,45400,50500], sN:178340, sS:178340},
+  {code:'8405028', n:'Splint (Roll)', spec:'6" × 4.5m', p:[49800,54100,58400,64900], sN:229180, sS:229180},
+  {code:'8301028', n:'Splint (Pre-Cut)', spec:'2" × 12"', p:[3400,3700,4000,4400],   sN:15330, sS:15580},
+  {code:'8305028', n:'Splint (Pre-Cut)', spec:'3" × 14"', p:[3800,4100,4400,4900],   sN:17070, sS:17070},
+  {code:'8310028', n:'Splint (Pre-Cut)', spec:'3" × 40"', p:[6000,6500,7000,7800],   sN:27300, sS:27300},
+  {code:'8312028', n:'Splint (Pre-Cut)', spec:'4" × 18"', p:[4500,4900,5200,5800],   sN:20360, sS:20360},
+  {code:'8314028', n:'Splint (Pre-Cut)', spec:'4" × 34"', p:[6000,6500,7000,7800],   sN:27300, sS:27300},
+  {code:'8321028', n:'Splint (Pre-Cut)', spec:'5" × 34"', p:[7100,7800,8400,9300],   sN:32680, sS:32680},
+  {code:'8324028', n:'Splint (Pre-Cut)', spec:'5" × 50"', p:[10700,11600,12600,14000], sN:49130, sS:49130},
+  {code:'8325028', n:'Splint (Pre-Cut)', spec:'6" × 34"', p:[7100,7800,8400,9300],   sN:32680, sS:32680},
+  {code:'8326028', n:'Splint (Pre-Cut)', spec:'6" × 50"', p:[13100,14300,15400,17100], sN:60300, sS:60300},
 ];
 const premoldLine=[
-  {n:'NPSA-S (Premold)', price:10800, suga:31330},
-  {n:'NPSA-M (Premold)', price:10800, suga:31330},
-  {n:'NPSA-L (Premold)', price:10800, suga:31330},
-  {n:'NPLA-S (Premold)', price:17180, suga:49870},
-  {n:'NPLA-M (Premold)', price:17180, suga:49870},
-  {n:'NPLA-L (Premold)', price:17180, suga:49870},
-  {n:'NPSL-S (Premold)', price:17180, suga:47390},
-  {n:'NPSL-M (Premold)', price:17180, suga:47390},
-  {n:'NPSL-L (Premold)', price:17180, suga:47390},
-  {n:'NPLL-S (Premold)', price:21880, suga:60350},
-  {n:'NPLL-M (Premold)', price:21880, suga:60350},
-  {n:'NPLL-L (Premold)', price:21880, suga:60350},
+  {code:'K8103228', n:'NPSA-S (Premold)', price:10800, suga:31330},
+  {code:'K8103228', n:'NPSA-M (Premold)', price:10800, suga:31330},
+  {code:'K8103228', n:'NPSA-L (Premold)', price:10800, suga:31330},
+  {code:'K8103028', n:'NPLA-S (Premold)', price:17180, suga:49870},
+  {code:'K8103028', n:'NPLA-M (Premold)', price:17180, suga:49870},
+  {code:'K8103028', n:'NPLA-L (Premold)', price:17180, suga:49870},
+  {code:'K8103328', n:'NPSL-S (Premold)', price:17180, suga:47390},
+  {code:'K8103328', n:'NPSL-M (Premold)', price:17180, suga:47390},
+  {code:'K8103328', n:'NPSL-L (Premold)', price:17180, suga:47390},
+  {code:'K8103128', n:'NPLL-S (Premold)', price:21880, suga:60350},
+  {code:'K8103128', n:'NPLL-M (Premold)', price:21880, suga:60350},
+  {code:'K8103128', n:'NPLL-L (Premold)', price:21880, suga:60350},
 ];
+/* 의료보험코드 → 보험수가 override (업로드본). null이면 기본 고시값 사용 */
+const sugaKnownCodes=new Set([...sugaCommon.map(x=>x.code), ...premoldLine.map(x=>x.code)]);
+function sugaBaseRate(code){ const a=sugaCommon.find(x=>x.code===code); if(a) return a.sN; const b=premoldLine.find(x=>x.code===code); return b?b.suga:null; }
+function sugaIsOv(code){ const r=data.sugaSource.rates; return !!(r && r[code]!=null && r[code]!==sugaBaseRate(code)); }
+function sugaCommonRate(x, brand){ const r=data.sugaSource.rates; if(r && brand==='NEAL' && r[x.code]!=null) return r[x.code]; return brand==='NEAL'?x.sN:x.sS; }
+function premoldRate(x){ const r=data.sugaSource.rates; return (r && r[x.code]!=null) ? r[x.code] : x.suga; }
+function parseNum(v){ if(v==null) return null; const s=String(v).replace(/[, ]/g,'').replace(/원/g,''); if(s==='-'||s==='') return null; const n=Number(s); return isFinite(n)?n:null; }
+function parseSugaWorkbook(wb){
+  const rates={}; let parsed=0;
+  wb.SheetNames.forEach(sn=>{
+    const ws=wb.Sheets[sn]; if(!ws) return;
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+    // 헤더행: '코드'(보험코드/의료보험코드) + '보험수가' 가 같은 행에 있는 곳
+    let h=-1;
+    for(let i=0;i<Math.min(rows.length,25);i++){
+      const cells=(rows[i]||[]).map(c=>String(c));
+      if(cells.some(c=>/코드/.test(c)) && cells.some(c=>/보험\s*수가|상한금액/.test(c))){ h=i; break; }
+    }
+    if(h<0) return;
+    const head=(rows[h]||[]).map(c=>String(c));
+    const codeCol=head.findIndex(c=>/코드/.test(c));
+    // '보험수가'·'상한금액' 컬럼 중 가장 오른쪽(=최신 고시일자) 선택
+    let sugaCol=-1; head.forEach((c,j)=>{ if(/보험\s*수가|상한금액/.test(c)) sugaCol=j; });
+    if(codeCol<0||sugaCol<0) return;
+    for(let i=h+1;i<rows.length;i++){
+      const row=rows[i]||[]; const raw=row[codeCol]; if(raw==null||raw==='') continue;
+      const code=String(raw).trim().toUpperCase().replace(/\s/g,'');
+      const val=parseNum(row[sugaCol]); if(val==null) continue;
+      rates[code]=val; parsed++;
+    }
+  });
+  let matched=0, changed=0;
+  sugaKnownCodes.forEach(c=>{ if(rates[c]!=null){ matched++; if(rates[c]!==sugaBaseRate(c)) changed++; } });
+  return { rates, report:{ parsed, matched, changed, total:sugaKnownCodes.size } };
+}
 const coverLine=[
   {n:'NCB-2010', price:3000},{n:'NCB-3008', price:3000},{n:'NCB-3012', price:3800},{n:'NCB-4008', price:3600},
   {n:'NCB-4014', price:4400},{n:'NCB-4018', price:5100},{n:'NCB-5012', price:4500},{n:'NCB-5018', price:5400},
@@ -183,10 +313,11 @@ function sugaSet(f,v){ const y=window.scrollY; state.suga[f]=v; render(); window
 function sugaToggle(k){ const y=window.scrollY; state.suga[k]=!state.suga[k]; render(); window.scrollTo(0,y); }
 function sugaTableHTML(){
   const st=state.suga, idx=sugaGi[st.grade];
-  const basic = sugaCommon.map(x=>`<tr><td></td><td>${st.brand} ${x.n} <span class="muted">${x.spec}</span></td><td class="num">${won(x.p[idx])}</td><td class="num">${won(st.brand==='NEAL'?x.sN:x.sS)}</td></tr>`).join('');
+  const ovc=c=>sugaIsOv(c)?'color:var(--teal);font-weight:700':'';
+  const basic = sugaCommon.map(x=>`<tr><td></td><td>${st.brand} ${x.n} <span class="muted">${x.spec}</span></td><td class="num">${won(x.p[idx])}</td><td class="num" style="${ovc(x.code)}">${won(sugaCommonRate(x,st.brand))}</td></tr>`).join('');
   let groups = `<tr class="grouphdr"><td></td><td colspan="3"><b>기본 (캐스트 · 스플린트)</b> <span class="badge ok">항상 포함</span></td></tr>${basic}`;
   if(st.brand==='NEAL'){
-    const pm = premoldLine.map(x=>`<tr><td></td><td>NEAL ${x.n}</td><td class="num">${won(x.price)}</td><td class="num">${x.suga!=null?won(x.suga):'<span class="muted">–</span>'}</td></tr>`).join('');
+    const pm = premoldLine.map(x=>`<tr><td></td><td>NEAL ${x.n}</td><td class="num">${won(x.price)}</td><td class="num" style="${ovc(x.code)}">${premoldRate(x)!=null?won(premoldRate(x)):'<span class="muted">–</span>'}</td></tr>`).join('');
     const cv = coverLine.map(x=>`<tr><td></td><td>NEAL ${x.n}</td><td class="num">${won(x.price)}</td><td class="num"><span class="muted">비급여</span></td></tr>`).join('');
     groups += `<tr class="grouphdr"><td style="text-align:center"><input type="checkbox" class="chk" ${st.premold?'checked':''} onclick="sugaToggle('premold')"></td><td colspan="3"><b>닐 프리몰드 라인</b> <span class="muted">견적서 선택 포함 · 단가 고정</span></td></tr>${pm}`;
     groups += `<tr class="grouphdr"><td style="text-align:center"><input type="checkbox" class="chk" ${st.cover?'checked':''} onclick="sugaToggle('cover')"></td><td colspan="3"><b>닐커버 라인 (NCB)</b> <span class="muted">견적서 선택 포함 · 단가 고정 · 비급여</span></td></tr>${cv}`;
@@ -207,6 +338,60 @@ function sugaTableHTML(){
       </table></div>
     </div>
   </div>`;
+}
+function nowStamp(){ const n=new Date(),p=x=>String(x).padStart(2,'0'); return `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())} ${p(n.getHours())}:${p(n.getMinutes())}`; }
+function sugaUpload(input){
+  const f=input.files&&input.files[0]; if(!f){ return; }
+  // 정리표(우리 제품 보험수가표) → 의료보험코드 기준 실제 반영
+  if(typeof XLSX==='undefined'){
+    data.sugaSource.xls={ name:f.name, at:nowStamp() };
+    data.sugaSource.label='업로드본 ('+f.name+')';
+    toast('엑셀 파서 미로딩(인터넷 필요) — 파일명만 기록');
+    input.value=''; render(); return;
+  }
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const wb=XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const res=parseSugaWorkbook(wb);
+      if(res.report.matched===0){
+        toast('보험수가를 못 읽었어요 — 양식(의료보험코드·보험수가 컬럼) 확인 필요');
+        input.value=''; render(); return;
+      }
+      data.sugaSource.rates=res.rates;
+      data.sugaSource.report=res.report;
+      data.sugaSource.xls={ name:f.name, at:nowStamp() };
+      data.sugaSource.label='업로드본 ('+f.name+')';
+      toast('수가표 반영 — '+res.report.matched+'개 품목 매칭 · '+res.report.changed+'개 변경');
+    }catch(err){
+      toast('엑셀 읽기 실패: '+(err&&err.message||err));
+    }
+    input.value=''; render();
+  };
+  reader.readAsArrayBuffer(f);
+}
+function sugaClearXls(){ data.sugaSource.xls=null; data.sugaSource.rates=null; data.sugaSource.report=null; data.sugaSource.label='2026-04-27 고시 기준'; toast('업로드본 해제 — 기본 고시값으로 복귀'); render(); }
+function quoteUpload(input){
+  const f=input.files&&input.files[0]; if(!f){ return; }
+  data.quoteUpload={ name:f.name, at:nowStamp() };
+  toast('견적서 파일 ‘'+f.name+'’ 첨부 완료 — 다우오피스로 발송할 수 있습니다');
+  input.value=''; render();
+}
+function quoteClear(){ data.quoteUpload=null; toast('첨부 견적서 해제'); render(); }
+function sugaUploadCard(){
+  const s=data.sugaSource, r=s.report;
+  return `<div class="card" style="margin-bottom:16px"><div class="pad">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:700;font-size:14px">수가표 자료 관리</div>
+        <div class="muted" style="font-size:12px;margin-top:3px">현재 적용본 : <b style="color:var(--ink)">${s.label}</b>${s.xls?` <span class="muted">· 업로드 ${s.xls.at}</span>`:''}</div>
+      </div>
+      <label class="btn primary" style="cursor:pointer"><input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="sugaUpload(this,'xls')">정리표 업로드 (표 반영)</label>${uploadBadge('extract')}
+      ${s.rates?`<button class="btn sm" onclick="sugaClearXls()">기본 고시값으로</button>`:''}
+    </div>
+    ${r?`<div style="margin-top:11px;display:flex;align-items:center;gap:10px;background:#ECFDF5;border:1px solid #A7F3D0;border-radius:8px;padding:9px 12px;font-size:12.5px;color:#065F46"><svg width="15" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg><b>의료보험코드 매칭 ${r.matched}/${r.total}개</b> · 보험수가 변경 ${r.changed}개 · 시트에서 ${r.parsed}행 인식</div>`:''}
+    <div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.6">· <b>정리표</b>(우리 제품 보험수가표 NEAL/SMILE)를 올리면 <b>의료보험코드</b>를 키로 표의 보험수가에 자동 반영됩니다.<br>· 양식: <b>의료보험코드 · 품명 · 규격 · 단위 · 보험수가</b> 컬럼이 한 행에 있으면 인식. 보험수가 컬럼이 여러 개면 가장 오른쪽(최신 고시일)을 적용.<br>· 현재는 화면 세션에만 반영됩니다(새로고침 시 초기화). 영구 저장·이력은 다음 단계 Firebase 연동으로 확장.</div>
+  </div></div>`;
 }
 
 function vHome(){
@@ -267,16 +452,17 @@ function vDomDash(){
   const totalSales=ags.reduce((s,a)=>s+a.sales,0);
   const recvCount=ags.filter(a=>a.recv>0).length;
   const meta=fieldMeta[state.domField];
-  const alerts=[...state.userAlerts, ...alertsByField[state.domField]];
+  const alerts=[...data.userAlerts, ...alertsByField[state.domField]];
   const stages=['제안','견적','협상','계약','납품'];
   const pipeline=pipelineByField[state.domField];
-  const shipPend=medOrders.filter(o=>o.kind==='주문'&&!o.shipped).length;
+  // 출하완료는 포털이 모르므로 '대기 건수' 대신 오늘 들어온 주문 수를 보여줍니다(조회 전용)
+  const shipToday=medOrders.filter(o=>o.kind==='주문'&&o.date===TODAY.toISOString().slice(0,10)).length;
   return `
   ${fieldTabs()}
   <div class="kpis" style="margin-bottom:20px">
     <div class="kpi"><div class="lab">당월 매출</div><div class="val">${won(totalSales)}</div><div class="sub">${state.domField} 분야</div></div>
     <div class="kpi" data-view="dom-agencies" style="cursor:pointer"><div class="lab">미수금 총액</div><div class="val warn">${won(totalRecv)}</div><div class="sub">${recvCount}곳 · 미수금 관리 →</div></div>
-    <div class="kpi" data-view="dom-shipping" style="cursor:pointer"><div class="lab">출고 대기</div><div class="val">${shipPend}건</div><div class="sub">출고 현황 →</div></div>
+    <div class="kpi" data-view="dom-shipping" style="cursor:pointer"><div class="lab">오늘 주문</div><div class="val">${shipToday}건</div><div class="sub">출고 현황 (조회) →</div></div>
   </div>
   <div class="seclabel">영업 일지 <span class="muted" style="font-weight:400">· 오늘 한 일을 적으면 유형별로 자동 분류돼 알림·Follow-up으로 갑니다</span></div>
   <div class="card"><div class="pad">
@@ -284,7 +470,7 @@ function vDomDash(){
       <input id="journalInput" class="search" style="flex:1" placeholder="예) 한백에 미수금 월말 분할입금 요청하고 왔어 / 부산 정형 반품 2건 접수" onkeydown="if(event.key==='Enter')journalSubmit()">
       <button class="btn primary" onclick="journalSubmit()">기록</button>
     </div>
-    <div style="margin-top:4px">${state.journal.length?state.journal.slice(0,6).map(j=>`<div style="display:flex;align-items:flex-start;gap:9px;padding:9px 0;border-bottom:1px solid var(--border)"><span class="badge ${typeColor(j.type)}" style="margin-top:1px">${j.type}</span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${j.summary}</div><div class="muted" style="font-size:11.5px">입력: ${j.raw} · ${j.when}</div></div></div>`).join(''):'<div class="muted" style="font-size:12.5px;padding:10px 2px">아직 기록이 없어요. 막 적어도 돼요 — 예) “한백에 미수금 100만원씩 월말에 입금하라고 말하고 왔어” → <b style="color:var(--ink-2)">[미수금] 한백 월말 100만원 입금 확인</b> 으로 정리·분류됩니다.</div>'}</div>
+    <div style="margin-top:4px">${data.journal.length?data.journal.slice(0,6).map(j=>`<div style="display:flex;align-items:flex-start;gap:9px;padding:9px 0;border-bottom:1px solid var(--border)"><span class="badge ${typeColor(j.type)}" style="margin-top:1px">${j.type}</span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${j.summary}</div><div class="muted" style="font-size:11.5px">입력: ${j.raw} · ${j.when}</div></div></div>`).join(''):'<div class="muted" style="font-size:12.5px;padding:10px 2px">아직 기록이 없어요. 막 적어도 돼요 — 예) “한백에 미수금 100만원씩 월말에 입금하라고 말하고 왔어” → <b style="color:var(--ink-2)">[미수금] 한백 월말 100만원 입금 확인</b> 으로 정리·분류됩니다.</div>'}</div>
   </div></div>
   <div class="seclabel" style="margin-top:22px">알림 <span class="muted" style="font-weight:400">· 영업 일지에서 분류된 항목이 자동으로 올라옵니다</span></div>
   <div class="card"><div class="pad"><div class="ledger-list">
@@ -313,7 +499,7 @@ function vAgencies(){
   const avgDays=recvCount?Math.round(recvList.reduce((s,a)=>s+Math.max(0,-daysUntil(a.pay)),0)/recvCount):0;
   const tab=state.recvTab||'미수 현황';
   const tabs=['미수 현황','원장 발송','채권채무조회서 발송'];
-  const fu=state.recvFollowups;
+  const fu=data.recvFollowups;
   const fuOpen=fu.filter(f=>f.status!=='회수완료').length;
   const fuCard=`<div class="card"><div class="pad">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><div class="seclabel" style="margin:0">회수 Follow-up</div><span class="badge ${fuOpen?'warn':'ok'}">미회수 ${fuOpen}</span></div>
@@ -340,6 +526,7 @@ function vAgencies(){
   return `
   ${fieldTabs()}
   <div class="pagehead"><div><div class="t">미수금 관리</div><div class="d">${state.domField} · 미수 현황·원장/채권채무조회서 발송·회수 Follow-up을 한 화면에서.</div></div></div>
+  ${sorNotice()}
   <div class="kpis" style="margin-bottom:16px">
     <div class="kpi"><div class="lab">미수금 총액</div><div class="val warn">${won(totalRecv)}</div><div class="sub">${ags.length}곳 중 ${recvCount}곳</div></div>
     <div class="kpi"><div class="lab">미수 거래처</div><div class="val">${recvCount}곳</div></div>
@@ -457,15 +644,15 @@ function journalSubmit(){
   const inp=document.getElementById('journalInput'); const v=(inp&&inp.value||'').trim(); if(!v) return;
   const r=classifyLog(v);
   const summary=summarizeLog(v, r.type, r.agency);
-  state.journal.unshift({when:nowStamp(), raw:v, summary, type:r.type, agency:r.agency});
-  state.userAlerts.unshift({tag:typeColor(r.type), t:summary, s:v});
-  if(r.type==='회수') state.recvFollowups.unshift({agency:r.agency||'', note:summary.replace(/^\[[^\]]+\]\s*/, ''), status:'미회수'});
+  data.journal.unshift({when:nowStamp(), raw:v, summary, type:r.type, agency:r.agency});
+  data.userAlerts.unshift({tag:typeColor(r.type), t:summary, s:v});
+  if(r.type==='회수') data.recvFollowups.unshift({agency:r.agency||'', note:summary.replace(/^\[[^\]]+\]\s*/, ''), status:'미회수'});
   toast('영업 일지 정리 → '+summary);
   render();
 }
 /* ---------------- 미수금 회수 Follow-up ---------------- */
-function recvFuAdd(){ const inp=document.getElementById('recvFuInput'); const v=(inp&&inp.value||'').trim(); if(!v){ toast('내용을 입력하세요'); return; } state.recvFollowups.unshift({agency:'', note:v, status:'미회수'}); toast('회수 Follow-up에 추가했습니다'); render(); }
-function recvFuToggle(i){ const f=state.recvFollowups[i]; if(!f) return; f.status=f.status==='회수완료'?'미회수':'회수완료'; render(); }
+function recvFuAdd(){ const inp=document.getElementById('recvFuInput'); const v=(inp&&inp.value||'').trim(); if(!v){ toast('내용을 입력하세요'); return; } data.recvFollowups.unshift({agency:'', note:v, status:'미회수'}); toast('회수 Follow-up에 추가했습니다'); render(); }
+function recvFuToggle(i){ const f=data.recvFollowups[i]; if(!f) return; f.status=f.status==='회수완료'?'미회수':'회수완료'; render(); }
 function setRecvTab(t){ state.recvTab=t; render(); }
 function setShipMode(m){ state.shipMode=m; render(); }
 /* ---------------- 출고현황 (출고 내역 리스트 — 언제·무엇·수량) ---------------- */
@@ -494,9 +681,9 @@ function shipSend(){
   if(!sel.length){ toast('발송할 출고 건을 선택하세요'); return; }
   const vv=(document.getElementById('shipVia')||{}).value||'팩스'; const via=vv==='팩스'?'하나팩스':'다우오피스 메일';
   const keys=sel.map(r=>r.no+'-'+r.code);
-  const retry={}; keys.forEach(k=>{ retry[k]=state.shipStatus[k]==='실패'; state.shipStatus[k]='전송중'; });
+  const retry={}; keys.forEach(k=>{ retry[k]=data.shipStatus[k]==='실패'; data.shipStatus[k]='전송중'; });
   toast(keys.length+'건 출고현황 발송 중… ('+via+')'); render();
-  setTimeout(function(){ var ok=0,fail=0; keys.forEach(function(k,i){ var s=retry[k]?true:(i%5!==4); state.shipStatus[k]=s?'성공':'실패'; if(s){state.shipChk.delete(k);ok++;}else fail++; }); render(); toast('출고현황 발송 완료 — 성공 '+ok+(fail?(' / 실패 '+fail+' (재발송하면 성공)'):'')+' ('+via+')'); }, 1000);
+  setTimeout(function(){ var ok=0,fail=0; keys.forEach(function(k,i){ var s=retry[k]?true:(i%5!==4); data.shipStatus[k]=s?'성공':'실패'; if(s){state.shipChk.delete(k);ok++;}else fail++; }); render(); toast('출고현황 발송 완료 — 성공 '+ok+(fail?(' / 실패 '+fail+' (재발송하면 성공)'):'')+' ('+via+')'); }, 1000);
 }
 function shipStatusSection(){
   const recs=shipStatusList();
@@ -515,7 +702,7 @@ function shipStatusSection(){
     </div>
     <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
       <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="shipCheckAll()"></th><th>출고일자</th><th>출고번호</th><th>거래처</th><th>품번</th><th>품명</th><th class="num">출고수량</th><th class="num">금액</th><th>발송 상태</th></tr></thead>
-      <tbody>${recs.map(r=>{const k=r.no+'-'+r.code; return `<tr><td><input type="checkbox" ${state.shipChk.has(k)?'checked':''} onclick="shipToggle('${k}')"></td><td>${r.date}</td><td>${r.no}</td><td><b>${r.agency}</b></td><td class="muted" style="font-size:12px">${r.code}</td><td>${r.item}</td><td class="num">${fmt(r.qty)}</td><td class="num">${won(r.qty*r.price)}</td><td>${statusBadge(state.shipStatus[k])}</td></tr>`;}).join('')}</tbody>
+      <tbody>${recs.map(r=>{const k=r.no+'-'+r.code; return `<tr><td><input type="checkbox" ${state.shipChk.has(k)?'checked':''} onclick="shipToggle('${k}')"></td><td>${r.date}</td><td>${r.no}</td><td><b>${r.agency}</b></td><td class="muted" style="font-size:12px">${r.code}</td><td>${r.item}</td><td class="num">${fmt(r.qty)}</td><td class="num">${won(r.qty*r.price)}</td><td>${statusBadge(data.shipStatus[k])}</td></tr>`;}).join('')}</tbody>
     </table></div>
     <div class="muted" style="font-size:12px;margin-top:8px">언제·무엇이·얼마나 나갔는지 출고 내역입니다. 체크 → [선택 발송]이면 끝 (<b style="font-weight:600">팩스는 하나팩스, 메일은 다우오피스 API</b>로 자동 발송).</div>`;
 }
@@ -533,7 +720,7 @@ function ledgerSection(group){
       <span class="badge teal">${isRecv?'기준 '+now.getFullYear()+'년 반기말':'기준 '+now.getFullYear()+'년 '+mLabel+' 마감'}</span>
       <span class="muted" style="font-size:12px">${desc}</span>
       <div style="flex:1"></div>
-      <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="ledgerUpload(this,'${isRecv?'잔액':'마감 자료'}')">${isRecv?'잔액 업로드 (엑셀)':'마감 자료 업로드 (엑셀)'}</label>
+      <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="ledgerUpload(this,'${isRecv?'잔액':'마감 자료'}')">${isRecv?'잔액 업로드 (엑셀)':'마감 자료 업로드 (엑셀)'}</label>${uploadBadge('extract')}
     </div>
     <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
       <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="ledgerCheckAll('${group}')"></th><th>거래처</th><th>등급</th>${isRecv?'<th class="num">미수 잔액</th>':'<th>특이</th>'}<th>파일형식</th><th>전송방법</th><th>경로</th><th>발송 상태</th></tr></thead>
@@ -545,7 +732,7 @@ function ledgerSection(group){
         <td><select onchange="ledgerSet('${group}','${t.name}','fmt',this.value)" style="border:1px solid var(--border-2);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:12px">${['엑셀','PDF','둘다'].map(o=>`<option ${t.fmt===o?'selected':''}>${o}</option>`).join('')}</select></td>
         <td><select onchange="ledgerSet('${group}','${t.name}','via',this.value)" style="border:1px solid var(--border-2);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:12px">${['팩스','메일'].map(o=>`<option ${t.via===o?'selected':''}>${o}</option>`).join('')}</select></td>
         <td class="muted" style="font-size:12px">${t.dest}</td>
-        <td>${statusBadge(state.ledgerStatus[k])}</td>
+        <td>${statusBadge(data.ledgerStatus[k])}</td>
       </tr>`;}).join('')}</tbody>
     </table></div>
     <div class="quick" style="margin-top:13px"><button class="btn primary" onclick="ledgerSend('${group}')">선택 발송 (${selN})</button><button class="btn" onclick="histModal()">발송 기록</button></div>
@@ -555,8 +742,9 @@ function ledgerSection(group){
 function vPricing(){
   setHead('보험수가표 · 견적서','국내영업');
   return `
-  <div class="pagehead"><div><div class="t">보험수가표 · 견적서</div><div class="d">메디컬 보험수가표(2026-04-27 고시 기준)를 확인하고, 거래처 등급에 맞춰 견적서를 발송합니다.</div></div>
+  <div class="pagehead"><div><div class="t">보험수가표 · 견적서</div><div class="d">메디컬 보험수가표(${data.sugaSource.label})를 확인하고, 거래처 등급에 맞춰 견적서를 발송합니다.</div></div>
     <button class="btn primary" data-view="quote">견적서 작성</button></div>
+  ${sugaUploadCard()}
   ${sugaTableHTML()}`;
 }
 /* ---------------- 계약 관리 ---------------- */
@@ -603,7 +791,7 @@ function vClients(){
     <label style="display:inline-flex;align-items:center;gap:11px;border:1.5px dashed var(--border-2);border-radius:10px;padding:11px 15px;cursor:pointer;background:var(--surface-2)">
       <input type="file" accept="image/*,.pdf" style="display:none" onchange="clientOcr(this)">
       <svg width="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--teal-d);flex:0 0 22px"><path d="M2 7.5a2 2 0 0 1 2-2h2.2l1.3-2h6.6l1.3 2H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><circle cx="12" cy="12" r="3.4"/></svg>
-      <div><b style="font-size:13px">사업자등록증 올리기 → 자동 입력</b><div class="muted" style="font-size:12px">사진·PDF를 올리면 상호·등록번호·대표자·주소·업태·종목을 자동 인식합니다.</div></div>
+      <div><b style="font-size:13px">사업자등록증 올리기 → 자동 입력</b>${uploadBadge('keep')}<div class="muted" style="font-size:12px">사진·PDF를 올리면 상호·등록번호·대표자·주소·업태·종목을 자동 인식합니다. 원본은 거래처당 1장만 증빙 보관합니다.</div></div>
     </label>
     <div id="ocrStatus" style="flex:1;min-width:150px;font-size:12.5px">${ocr?'<span class="badge ok">자동 인식 완료 · '+(ocr._file||'')+'</span>':'<span class="muted">아직 올린 파일이 없습니다.</span>'}</div>
   </div></div>
@@ -1002,34 +1190,25 @@ function vProposal(){
   </div>`;
 }
 
-const medStock={ 'NPC-2P-GR':120, 'NHRS-3450N':40, 'NHC-2F-WH':300, 'NPC-3P-GR':0, 'NHPS-3014N':8 };
+// 주문 조회용 데이터(카페24 유입). 재고·출하완료는 포털이 보유하지 않습니다.
 const medOrders=[
-  {no:'C26-10482', cust:'대성 메디칼', code:'NPC-2P-GR', item:'NEAL 캐스트 2"', qty:80, date:'2026-06-13', kind:'주문', shipped:false},
-  {no:'C26-10483', cust:'우리 헬스케어', code:'NHRS-3450N', item:'롤 스플린트 3"', qty:60, date:'2026-06-13', kind:'주문', shipped:false},
-  {no:'C26-10485', cust:'한백', code:'NPC-3P-GR', item:'NEAL 캐스트 3"', qty:30, date:'2026-06-13', kind:'주문', shipped:false},
-  {no:'C26-10470', cust:'세정코리아', code:'NHC-2F-WH', item:'하이드로겔 커버 2"', qty:100, date:'2026-06-11', kind:'주문', shipped:false},
-  {no:'C26-10460', cust:'메디홀스', code:'NHPS-3014N', item:'프리컷 3"(샘플)', qty:5, date:'2026-06-13', kind:'샘플요청', shipped:false},
-  {no:'C26-10461', cust:'케이알닥터스', code:'NPC-2P-GR', item:'불량 대체품', qty:6, date:'2026-06-13', kind:'불량대체품', shipped:false},
+  {no:'C26-10482', cust:'대성 메디칼', code:'NPC-2P-GR', item:'NEAL 캐스트 2"', qty:80, date:'2026-06-13', kind:'주문'},
+  {no:'C26-10483', cust:'우리 헬스케어', code:'NHRS-3450N', item:'롤 스플린트 3"', qty:60, date:'2026-06-13', kind:'주문'},
+  {no:'C26-10485', cust:'한백', code:'NPC-3P-GR', item:'NEAL 캐스트 3"', qty:30, date:'2026-06-13', kind:'주문'},
+  {no:'C26-10470', cust:'세정코리아', code:'NHC-2F-WH', item:'하이드로겔 커버 2"', qty:100, date:'2026-06-11', kind:'주문'},
+  {no:'C26-10460', cust:'메디홀스', code:'NHPS-3014N', item:'프리컷 3"(샘플)', qty:5, date:'2026-06-13', kind:'샘플요청'},
+  {no:'C26-10461', cust:'케이알닥터스', code:'NPC-2P-GR', item:'불량 대체품', qty:6, date:'2026-06-13', kind:'불량대체품'},
 ];
-function shipVerdict(o){
-  const stock=medStock[o.code]; const st=(stock==null?0:stock);
-  if(o.kind!=='주문') return {lab:o.kind, c:'info', kind:'기타'};
-  if(o.qty>st) return {lab:'재고 부족', c:'danger', kind:'부족'};
-  if(o.date<TODAY.toISOString().slice(0,10)) return {lab:'미출고(대기)', c:'warn', kind:'미출고'};
-  return {lab:'자동 출고의뢰', c:'ok', kind:'정상'};
-}
 function vShipping(){
   setHead('출고 현황','국내영업');
   const mode=state.shipMode||'의뢰';
-  const modeTabs=`<div class="card" style="margin-bottom:14px"><div class="tabs">${['의뢰','현황'].map(m=>`<button class="${m===mode?'active':''}" onclick="setShipMode('${m}')">${m==='의뢰'?'출고 의뢰':'출고현황 발송'}</button>`).join('')}</div></div>`;
+  const modeTabs=`<div class="card" style="margin-bottom:14px"><div class="tabs">${['의뢰','현황'].map(m=>`<button class="${m===mode?'active':''}" onclick="setShipMode('${m}')">${m==='의뢰'?'주문 · 출고 내역 (조회)':'출고현황 발송'}</button>`).join('')}</div></div>`;
   if(mode==='현황'){ return `
     <div class="pagehead"><div><div class="t">출고 현황</div><div class="d">언제·무엇이·얼마나 나갔는지 출고 내역을 보고, 체크해서 거래처에 발송합니다.</div></div></div>
     ${modeTabs}
     <div class="card"><div class="pad" style="padding-top:14px">${shipStatusSection()}</div></div>`; }
   const today=TODAY.toISOString().slice(0,10);
   const todayOrders=medOrders.filter(o=>o.kind==='주문'&&o.date===today).length;
-  const shortCnt=medOrders.filter(o=>o.kind==='주문'&&!o.shipped&&o.qty>(medStock[o.code]||0)).length;
-  const pendCnt=medOrders.filter(o=>o.kind==='주문'&&!o.shipped&&o.date<today).length;
   const etcCnt=medOrders.filter(o=>['샘플요청','불량대체품','맞교환'].includes(o.kind)).length;
   const tab = state.shipTab || '메디컬';
   let body;
@@ -1037,14 +1216,14 @@ function vShipping(){
     body=`
     <div class="card" style="margin:16px 0;border-left:3px solid var(--ok)"><div class="pad" style="display:flex;align-items:center;gap:12px">
       <span class="dotmark" style="background:var(--ok)"></span>
-      <div style="flex:1"><b style="font-size:13.5px">카페24 주문 실시간 연동됨</b><div class="muted" style="font-size:12px">마지막 동기화 06/13 11:40 · OAuth 연결 정상 · 주문은 보유재고와 자동 매칭</div></div>
+      <div style="flex:1"><b style="font-size:13.5px">카페24 주문 실시간 연동됨</b><div class="muted" style="font-size:12px">마지막 동기화 06/13 11:40 · OAuth 연결 정상 · 주문 내역만 조회합니다</div></div>
       <button class="btn sm" onclick="toast('카페24에서 주문을 다시 가져왔습니다')">지금 동기화</button>
     </div></div>
     <div class="card ov"><table>
-      <thead><tr><th>주문번호</th><th>거래처</th><th>품목(코드)</th><th class="num">수량</th><th class="num">보유재고</th><th>판정 / 구분</th><th></th></tr></thead>
-      <tbody>${medOrders.map(o=>{const v=shipVerdict(o); const st=medStock[o.code]; return `<tr><td>${o.no}<div class="muted" style="font-size:11px">${o.date===today?'당일':o.date.slice(5)}</div></td><td><b>${o.cust}</b></td><td>${o.item}<div class="muted" style="font-size:11px">${o.code}</div></td><td class="num">${fmt(o.qty)}</td><td class="num ${o.kind==='주문'&&o.qty>(st||0)?'':'muted'}" style="${o.kind==='주문'&&o.qty>(st||0)?'color:var(--danger);font-weight:600':''}">${st==null?'—':fmt(st)}</td><td><span class="badge ${v.c}">${v.lab}</span></td><td class="num"><button class="btn sm ${v.c==='ok'?'primary':''}" ${v.c==='danger'?'disabled':''} onclick="toast('${o.no} ${v.c==='danger'?'재고 입고 후 출고':'출고 의뢰 전송'}')">출고 의뢰</button></td></tr>`;}).join('')}</tbody>
+      <thead><tr><th>주문번호</th><th>거래처</th><th>품목(코드)</th><th class="num">수량</th><th>구분</th></tr></thead>
+      <tbody>${medOrders.map(o=>`<tr><td>${o.no}<div class="muted" style="font-size:11px">${o.date===today?'당일':o.date.slice(5)}</div></td><td><b>${o.cust}</b></td><td>${o.item}<div class="muted" style="font-size:11px">${o.code}</div></td><td class="num">${fmt(o.qty)}</td><td><span class="badge ${o.kind==='주문'?'info':'muted'}">${o.kind}</span></td></tr>`).join('')}</tbody>
     </table></div>
-    <div class="muted" style="font-size:12px;margin-top:10px">메디컬은 별도 생산출고의뢰서 없이 카페24 주문이 자동 출고 의뢰되며, 보유재고와 매칭해 ‘재고 부족·미출고’를 판정합니다. 예외는 좌측 상단 엑셀 업로드(백업)로 처리합니다.</div>`;
+    <div class="muted" style="font-size:12px;margin-top:10px">메디컬은 카페24 주문이 자동으로 넘어옵니다. <b style="font-weight:600">재고 판정·출고 진행·출하완료는 수주~출고 시스템의 몫</b>이라 이 화면에서는 조회만 합니다.</div>`;
   } else {
     const po=[
       {code:'DAOC-2F-BL', internal:'NHC-2F-BL', color:'파랑', qty:30},
@@ -1073,12 +1252,11 @@ function vShipping(){
     <div class="muted" style="font-size:12px;margin-top:10px">색상은 거래처 기본값으로 자동 입력되며, PO가 없는 건 등 예외는 수기로 처리합니다.</div>`;
   }
   return `
-  <div class="pagehead"><div><div class="t">출고 현황</div><div class="d">출고 의뢰와 출고현황 발송을 한 메뉴에서 처리합니다. 상단 요약은 오늘(${today.slice(5).replace('-','/')}) 기준입니다.</div></div></div>
+  <div class="pagehead"><div><div class="t">출고 현황</div><div class="d">출고 내역 조회와 출고현황 발송을 한 메뉴에서 처리합니다. 상단 요약은 오늘(${today.slice(5).replace('-','/')}) 기준입니다.</div></div></div>
   ${modeTabs}
+  ${shipReadonlyNotice()}
   <div class="kpis" style="margin-bottom:18px">
     <div class="kpi"><div class="lab">오늘 총 주문</div><div class="val">${todayOrders}건</div><div class="sub">카페24 당일 주문</div></div>
-    <div class="kpi"><div class="lab">재고 부족</div><div class="val ${shortCnt?'danger':''}">${shortCnt}건</div><div class="sub">주문 수량 &gt; 보유재고</div></div>
-    <div class="kpi"><div class="lab">현재 미출고</div><div class="val ${pendCnt?'warn':''}">${pendCnt}건</div><div class="sub">이전 주문 · 오늘까지 미출고</div></div>
     <div class="kpi"><div class="lab">기타 출고</div><div class="val">${etcCnt}건</div><div class="sub">샘플·불량대체·맞교환</div></div>
   </div>
   <div class="card"><div class="tabs" id="shipTabs">
@@ -1169,24 +1347,28 @@ function histModal(){
 }
 
 function unitOf(n){ return n.indexOf('Pre-Cut')>=0?'EA':(n.indexOf('Roll')>=0||n==='Cast')?'Roll':'1EA'; }
-function sendQuote(){ const el=document.getElementById('quoteEmail'); const v=(el&&el.value||'').trim(); if(!v){ toast('받는 사람 이메일을 입력하세요'); return; } toast(v+' 앞으로 견적서를 발송했습니다 (다우오피스)'); }
+function sendQuote(){ const el=document.getElementById('quoteEmail'); const v=(el&&el.value||'').trim(); if(!v){ toast('받는 사람 이메일을 입력하세요'); return; } const src=data.quoteUpload?'첨부 파일 ‘'+data.quoteUpload.name+'’':'자동 생성 견적서'; toast(v+' 앞으로 '+src+'를 발송했습니다 (다우오피스)'); }
 function vQuote(){
   const st=state.suga, idx=sugaGi[st.grade];
   const now=new Date(), pad=n=>String(n).padStart(2,'0');
   const y=now.getFullYear(), m=now.getMonth()+1, d=now.getDate();
   const docno='BL-DT-'+y+pad(m)+pad(d);
   setHead('견적서 작성','국내영업 · 견적서');
-  let qrows = sugaCommon.map(x=>({name:st.brand+' '+x.n, spec:x.spec, unit:unitOf(x.n), suga:fmt(st.brand==='NEAL'?x.sN:x.sS), price:fmt(x.p[idx])}));
-  if(st.brand==='NEAL' && st.premold) qrows=qrows.concat(premoldLine.map(x=>({name:'NEAL '+x.n, spec:'', unit:'1EA', suga:x.suga!=null?fmt(x.suga):'–', price:fmt(x.price)})));
+  let qrows = sugaCommon.map(x=>({name:st.brand+' '+x.n, spec:x.spec, unit:unitOf(x.n), suga:fmt(sugaCommonRate(x,st.brand)), price:fmt(x.p[idx])}));
+  if(st.brand==='NEAL' && st.premold) qrows=qrows.concat(premoldLine.map(x=>({name:'NEAL '+x.n, spec:'', unit:'1EA', suga:premoldRate(x)!=null?fmt(premoldRate(x)):'–', price:fmt(x.price)})));
   if(st.brand==='NEAL' && st.cover) qrows=qrows.concat(coverLine.map(x=>({name:'NEAL '+x.n, spec:'', unit:'EA', suga:'비급여', price:fmt(x.price)})));
   const incl=[]; if(st.brand==='NEAL'){ if(st.premold) incl.push('프리몰드'); if(st.cover) incl.push('닐커버'); }
   return `
   <div class="back" data-view="dom-pricing">← 보험수가표 · 견적서</div>
-  <div class="card" style="margin-bottom:16px"><div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+  <div class="card" style="margin-bottom:16px"><div class="pad">
+   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <div style="flex:1;min-width:180px"><b>견적서</b> <span class="muted">· ${st.brand} · 단가 등급 ${st.grade}${incl.length?' · '+incl.join('·')+' 포함':''}</span></div>
     <input class="search" id="quoteEmail" style="min-width:230px" placeholder="받는 사람 이메일 (다우오피스)">
+    <label class="btn" style="cursor:pointer"><input type="file" accept=".pdf,.xlsx,.xls" style="display:none" onchange="quoteUpload(this)">견적서 파일 업로드</label>${uploadBadge('keep')}
     <button class="btn" onclick="toast('견적서 PDF 다운로드 (프로토타입)')">PDF 다운로드</button>
     <button class="btn primary" onclick="sendQuote()">다우오피스로 발송</button>
+   </div>
+   ${data.quoteUpload?`<div style="margin-top:11px;display:flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:12.5px"><svg width="15" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><b>${data.quoteUpload.name}</b><span class="muted">· 첨부됨 · 발송 시 이 파일로 전송 · ${data.quoteUpload.at}</span><button class="btn sm" style="margin-left:auto" onclick="quoteClear()">제거</button></div>`:`<div class="muted" style="font-size:11.5px;margin-top:9px">아래 자동 생성 견적서를 발송하거나, 직접 만든 <b>견적서 파일(.pdf/.xlsx)</b>을 업로드해 다우오피스로 보낼 수 있습니다.</div>`}
   </div></div>
   <div class="doc">
     <div style="text-align:center"><b style="font-size:19px">비엘테크(주)</b></div>
@@ -1382,7 +1564,8 @@ const ledgerTargets={
 const ledgerTabs=['원장','출고현황','채권채무조회서'];
 const fmtBadge=f=>({'엑셀':'ok','PDF':'info','둘다':'teal'}[f]||'muted');
 function setLedgerTab(t){ state.ledgerTab=t; render(); }
-function ledgerUpload(input, kind){ const f=input.files&&input.files[0]; if(!f) return; toast('영림원에서 내보낸 '+kind+' 엑셀 ‘'+f.name+'’ 업로드 완료 — 거래처별 금액에 반영(반자동)'); input.value=''; }
+// 추출용: 엑셀에서 수치만 읽어 반영하고 원본 파일은 보관하지 않음 (Storage에 쌓이지 않게)
+function ledgerUpload(input, kind){ const f=input.files&&input.files[0]; if(!f) return; toast('영림원 '+kind+' 엑셀 ‘'+f.name+'’ 반영 완료 — 수치만 반영, 원본 미보관'); input.value=''; }
 function ledgerToggle(k){ const y=window.scrollY; if(state.ledgerChk.has(k)) state.ledgerChk.delete(k); else state.ledgerChk.add(k); render(); window.scrollTo(0,y); }
 function ledgerCheckAll(group){ const y=window.scrollY; const keys=ledgerTargets[group].map(t=>group+'::'+t.name); const allOn=keys.every(k=>state.ledgerChk.has(k)); keys.forEach(k=>{ allOn?state.ledgerChk.delete(k):state.ledgerChk.add(k); }); render(); window.scrollTo(0,y); }
 function ledgerSet(group,name,field,val){ const y=window.scrollY; const it=ledgerTargets[group].find(t=>t.name===name); if(it) it[field]=val; render(); window.scrollTo(0,y); }
@@ -1390,9 +1573,9 @@ function ledgerSend(group){
   const sel=[...state.ledgerChk].filter(k=>k.startsWith(group+'::'));
   if(!sel.length){ toast('발송할 거래처를 선택하세요'); return; }
   const faxN=sel.filter(k=>{const n=k.split('::')[1]; const it=ledgerTargets[group].find(t=>t.name===n); return it&&it.via==='팩스';}).length;
-  const retry={}; sel.forEach(k=>{ retry[k]=state.ledgerStatus[k]==='실패'; state.ledgerStatus[k]='전송중'; });
+  const retry={}; sel.forEach(k=>{ retry[k]=data.ledgerStatus[k]==='실패'; data.ledgerStatus[k]='전송중'; });
   toast(group+' '+sel.length+'개사 발송 중… (하나팩스 '+faxN+' / 다우오피스 메일 '+(sel.length-faxN)+')'); render();
-  setTimeout(function(){ var ok=0,fail=0; sel.forEach(function(k,i){ var s=retry[k]?true:(i%5!==4); state.ledgerStatus[k]=s?'성공':'실패'; if(s){state.ledgerChk.delete(k);ok++;}else fail++; }); render(); toast(group+' 발송 완료 — 성공 '+ok+(fail?(' / 실패 '+fail+' (재발송하면 성공)'):'')); }, 1000);
+  setTimeout(function(){ var ok=0,fail=0; sel.forEach(function(k,i){ var s=retry[k]?true:(i%5!==4); data.ledgerStatus[k]=s?'성공':'실패'; if(s){state.ledgerChk.delete(k);ok++;}else fail++; }); render(); toast(group+' 발송 완료 — 성공 '+ok+(fail?(' / 실패 '+fail+' (재발송하면 성공)'):'')); }, 1000);
 }
 function vLedger(){
   const isShip = state.view==='dom-shipstatus';
@@ -1409,13 +1592,14 @@ function vLedger(){
   const desc={'원장':'매달 원장 — 매출 마감 후 발송. 거래처별 파일형식(엑셀/PDF/둘다)·전송방법(팩스/메일)·경로가 다릅니다.','출고현황':'매달 출고현황 — 월말 발송. 거래처별 파일형식·전송방법·경로 적용.','채권채무조회서':'반기말(6/30·12/31) 기준 잔액 보유 거래처에 발송(미수금 관리에서 이동). 회신처 FAX 031-629-5216.'}[tab];
   return `
   <div class="pagehead"><div><div class="t">${isShip?'출고현황 발송':'원장 · 채권채무조회서 발송'}</div><div class="d">${isShip?'매달 출고현황을 거래처별 파일형식(엑셀/PDF/둘다)·전송방법(팩스/메일)·경로로 발송합니다.':'원장·채권채무조회서를 탭으로 나눠 발송합니다. 파일형식(엑셀/PDF/둘다)은 ‘보내는 파일’, 팩스/메일은 ‘보내는 방법’이며 거래처별로 다릅니다.'}</div></div></div>
+  ${sorNotice()}
   <div class="card">${tabsHere.length>1?`<div class="tabs" id="ledgerTabs">${tabsHere.map(t=>`<button class="${t===tab?'active':''}" onclick="setLedgerTab('${t}')">${t}</button>`).join('')}</div>`:''}
   <div class="pad" style="padding-top:${tabsHere.length>1?'8px':'14px'}">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <span class="badge teal">${isRecv?'기준 '+now.getFullYear()+'년 반기말':'기준 '+now.getFullYear()+'년 '+mLabel+' 마감'}</span>
       <span class="muted" style="font-size:12px">${desc}</span>
       <div style="flex:1"></div>
-      <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="ledgerUpload(this,'${isRecv?'잔액':'마감 자료'}')">${isRecv?'잔액 업로드 (엑셀)':'마감 자료 업로드 (엑셀)'}</label>
+      <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="ledgerUpload(this,'${isRecv?'잔액':'마감 자료'}')">${isRecv?'잔액 업로드 (엑셀)':'마감 자료 업로드 (엑셀)'}</label>${uploadBadge('extract')}
     </div>
     <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
       <thead><tr><th style="width:34px"><input type="checkbox" ${allOn?'checked':''} onclick="ledgerCheckAll('${tab}')"></th><th>거래처</th><th>등급</th>${isRecv?'<th class="num">미수 잔액</th>':'<th>특이</th>'}<th>파일형식</th><th>전송방법</th><th>경로</th></tr></thead>
@@ -1434,349 +1618,50 @@ function vLedger(){
   </div></div>`;
 }
 
-/* ================= 해외영업 ================= */
-const nealCatalog=[
-  {grp:'Casting Tape · Rigid (P)', moq:'500 Rolls', items:[['NPC-1P','1"×2.4yd',1.10,0.99],['NPC-2P','2"×4yd',1.50,1.35],['NPC-3P','3"×4yd',1.70,1.53],['NPC-4P','4"×4yd',2.00,1.80],['NPC-5P','5"×4yd',2.30,2.07],['NPC-6P','6"×4yd',2.50,2.25]]},
-  {grp:'Casting Tape · Rigid Fiberglass (F)', moq:'500 Rolls', items:[['NPC-1F','1"×2.4yd',1.30,1.17],['NPC-2F','2"×4yd',1.60,1.44],['NPC-3F','3"×4yd',1.80,1.62],['NPC-4F','4"×4yd',2.10,1.89],['NPC-5F','5"×4yd',2.40,2.16],['NPC-6F','6"×4yd',2.60,2.34]]},
-  {grp:'Casting Tape · Soft Polyester (S)', moq:'500 Rolls', items:[['NPS-1P','1"×2.4yd',1.20,1.08],['NPS-2P','2"×4yd',1.60,1.44],['NPS-3P','3"×4yd',1.80,1.62],['NPS-4P','4"×4yd',2.10,1.89],['NPS-5P','5"×4yd',2.40,2.16],['NPS-6P','6"×4yd',2.60,2.34]]},
-  {grp:'Roll Splint · Non-woven', moq:'50 Rolls', items:[['NHRS-2450N','2"×15ft',26.00,23.40],['NHRS-3450N','3"×15ft',32.00,28.80],['NHRS-4450N','4"×15ft',40.00,36.00],['NHRS-5450N','5"×15ft',46.00,41.40],['NHRS-6450N','6"×15ft',53.00,47.70]]},
-  {grp:'Roll Splint · Fiberglass', moq:'50 Rolls', items:[['NHRS-2450F','2"×15ft',28.60,25.74],['NHRS-3450F','3"×15ft',35.20,31.68],['NHRS-4450F','4"×15ft',44.00,39.60],['NHRS-5450F','5"×15ft',50.60,45.54],['NHRS-6450F','6"×15ft',58.30,52.47]]},
-  {grp:'Roll Splint · Single Polyester', moq:'50 Rolls', items:[['NHRS-2450SP','2"×15ft',26.00,23.40],['NHRS-3450SP','3"×15ft',32.00,28.80],['NHRS-4450SP','4"×15ft',40.00,36.00],['NHRS-5450SP','5"×15ft',46.00,41.40],['NHRS-6450SP','6"×15ft',53.00,47.70]]},
-  {grp:'Precut Splint · Non-woven', moq:'20 Boxes', items:[['NHPS-2012N','2"×12"',3.20,2.88],['NHPS-3014N','3"×14"',4.00,3.60],['NHPS-3040N','3"×40"',9.50,8.55],['NHPS-4018N','4"×18"',5.50,4.95],['NHPS-4034N','4"×34"',9.50,8.55],['NHPS-5034N','5"×34"',11.00,9.90],['NHPS-5050N','5"×50"',15.50,13.95],['NHPS-6034N','6"×34"',13.00,11.70],['NHPS-6050N','6"×50"',17.50,15.75]]},
-  {grp:'Precut Splint · Fiberglass', moq:'20 Boxes', items:[['NHPS-2012F','2"×12"',3.52,3.17],['NHPS-3014F','3"×14"',4.40,3.96],['NHPS-3040F','3"×40"',10.45,9.41],['NHPS-4018F','4"×18"',6.05,5.45],['NHPS-4034F','4"×34"',10.45,9.41],['NHPS-5034F','5"×34"',12.10,10.89],['NHPS-5050F','5"×50"',17.05,15.35],['NHPS-6034F','6"×34"',14.30,12.87],['NHPS-6050F','6"×50"',19.25,17.33]]},
-  {grp:'Precut Splint · Single Polyester', moq:'20 Boxes', items:[['NHPS-2012SP','2"×12"',3.20,2.88],['NHPS-3014SP','3"×14"',4.00,3.60],['NHPS-3040SP','3"×40"',9.50,8.55],['NHPS-4018SP','4"×18"',5.50,4.95],['NHPS-4034SP','4"×34"',9.50,8.55],['NHPS-5034SP','5"×34"',11.00,9.90],['NHPS-5050SP','5"×50"',15.50,13.95],['NHPS-6034SP','6"×34"',13.00,11.70],['NHPS-6050SP','6"×50"',17.50,15.75]]},
-  {grp:'Under-pad · Roll', moq:'6~16 Rolls', items:[['NUP-1100','1"×33ft',13.50,12.15],['NUP-2100','2"×33ft',17.00,15.30],['NUP-3100','3"×33ft',22.00,19.80],['NUP-4100','4"×33ft',27.50,24.75],['NUP-5100','5"×33ft',33.00,29.70],['NUP-6100','6"×33ft',38.50,34.65]]},
-  {grp:'Under-pad · Pcs', moq:'20 Boxes', items:[['NUPP-2050','2"×20"',1.00,0.90],['NUPP-2080','2"×32"',1.40,1.26],['NUPP-3050','3"×20"',1.20,1.08],['NUPP-3080','3"×32"',1.90,1.71],['NUPP-4050','4"×20"',1.50,1.35],['NUPP-4080','4"×32"',2.30,2.07],['NUPP-5080','5"×32"',2.80,2.52],['NUPP-5120','5"×48"',4.10,3.69],['NUPP-6080','6"×32"',3.20,2.88],['NUPP-6120','6"×48"',4.70,4.23]]},
-];
-const ovAgencies = [
-  {id:'o1', name:'Tokyo Medical Co.', country:'일본', field:'메디컬', inco:'FOB', pay:'T/T', cur:'JPY', fwd:'우리 지정 포워더(오셔) · 해상 FCL', cycle:30, lastDays:18},
-  {id:'o2', name:'DAONSA', country:'멕시코', field:'하이드로겔', inco:'FOB', pay:'T/T', cur:'USD', fwd:'고객사 포워더 수배 · 해상', cycle:45, lastDays:47},
-  {id:'o3', name:"YOVANN'S CO", country:'프랑스', field:'메디컬', inco:'DAP', pay:'T/T', cur:'USD', fwd:'우리 지정 포워더 · 항공', cycle:35, lastDays:30},
-  {id:'o4', name:'Oce Inc.', country:'미국', field:'메디컬', inco:'EXW', pay:'T/T', cur:'USD', fwd:'고객사 포워더 수배', cycle:28, lastDays:33},
-  {id:'o5', name:'Rakesh Surgicals', country:'인도', field:'케미컬', inco:'FOB', pay:'T/T', cur:'USD', fwd:'고객사 포워더 수배 · 해상', cycle:21, lastDays:38},
-  {id:'o6', name:'Gulf Plant Materials', country:'UAE', field:'플랜트', inco:'CIF', pay:'L/C', cur:'USD', fwd:'우리 지정 포워더 · 해상 CIF', cycle:60, lastDays:20},
-];
-const ovOrders = [
-  {pi:'P12810', agency:'Tokyo Medical Co.', country:'일본', field:'메디컬', cur:'JPY', amount:3850000, inco:'FOB', stage:'선적', dep:true, bal:false, etd:'06/18'},
-  {pi:'P12747', agency:'DAONSA', country:'멕시코', field:'하이드로겔', cur:'USD', amount:48200, inco:'FOB', stage:'생산', dep:true, bal:false, etd:'06/22'},
-  {pi:'P12760', agency:"YOVANN'S CO", country:'프랑스', field:'메디컬', cur:'USD', amount:12600, inco:'DAP', stage:'PI 발행', dep:false, bal:false, etd:'06/30'},
-  {pi:'P12733', agency:'Oce Inc.', country:'미국', field:'메디컬', cur:'USD', amount:21400, inco:'EXW', stage:'수출서류', dep:true, bal:true, etd:'06/12'},
-  {pi:'P12790', agency:'Rakesh Surgicals', country:'인도', field:'케미컬', cur:'USD', amount:9800, inco:'FOB', stage:'정산', dep:true, bal:true, etd:'06/05'},
-  {pi:'P12771', agency:'Gulf Plant Materials', country:'UAE', field:'플랜트', cur:'USD', amount:64500, inco:'CIF', stage:'생산', dep:true, bal:false, etd:'06/27'},
-];
-const ovPOInbox = [
-  {id:0, from:'DAONSA', mail:'po@daonsa.mx', subj:'Purchase Order P12747 - Hydrogel', date:'06/12', matched:false,
-   body:`Dear BL TECH,\n\nPlease find attached our purchase order P12747.\nKindly confirm the PI and lead time.\n\nItems:\n- DAOC-2010  x 2,000 pcs\n- DAOC-3012  x 1,500 pcs\n- DAOC-9988  x 500 pcs (new item)\n\nIncoterm: FOB Busan\nPayment: T/T 30/70\n\nBest regards,\nDAONSA Purchasing`,
-   atts:[{name:'PO-Orden_de_compra_P12747.pdf', type:'pdf'}],
-   pi:{no:'P12747', cur:'USD', inco:'FOB', lines:[['DAOC-2010 → NHC-2010','하이드로겔 커버 2010',2000,'BL'],['DAOC-3012 → NHC-3012','하이드로겔 커버 3012',1500,'WH'],['DAOC-9988 → ?','미매칭 코드',500,'?']]}},
-  {id:1, from:'Tokyo Medical', mail:'order@tokyomed.jp', subj:'PO-219996 June Tokyo', date:'06/10', matched:true,
-   body:`BL TECH 영업팀 귀하\n\n6월 주문서(PO-219996) 송부드립니다. 첨부 확인 부탁드립니다.\n\nNPC-2P x 500 Rolls\nNHRS-3450N x 50 Rolls\n\nIncoterm: FOB Busan / T/T 30/70\n\nTokyo Medical Co.`,
-   atts:[{name:'PO-219996_June_Tokyo.xls', type:'xls'},{name:'생산출고의뢰서_시그맥스.xlsx', type:'xls'}],
-   pi:{no:'P12811', cur:'JPY', inco:'FOB', lines:[['NPC-2P','Rigid Casting 2"',500,'—'],['NHRS-3450N','Roll Splint NW 3"',50,'—']]}},
-  {id:2, from:'Rakesh Surgicals', mail:'rakesh@surgicals.in', subj:'New PO - chemical line', date:'06/09', matched:true,
-   body:`Hello,\n\nNew PO attached. Please proceed.\n\nThank you,\nRakesh`,
-   atts:[{name:'PO_Rakesh_0609.pdf', type:'pdf'}],
-   pi:{no:'P12812', cur:'USD', inco:'FOB', lines:[['NHPS-5034N','Precut Splint 5"×34"',200,'—']]}},
-];
-function ovField(){ return state.ovField||'메디컬'; }
-function setOvField(f){ state.ovField=f; render(); }
-function ovFieldTabs(){ return `<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">${['메디컬','케미컬','하이드로겔','플랜트'].map(f=>`<button class="btn" style="${f===ovField()?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setOvField('${f}')">${f}</button>`).join('')}</div>`; }
-function ovMoney(n,cur){ return (cur==='USD'?'$':cur==='JPY'?'¥':'₩')+fmt(n); }
-function payBadge(ok){ return ok?'<span class="badge ok">입금완료</span>':'<span class="badge danger">미입금</span>'; }
-function ovSend(inputId,label){ const el=document.getElementById(inputId); const v=(el&&el.value||'').trim(); if(!v){ toast('받는 사람 이메일을 입력하세요'); return; } toast(v+' 앞으로 '+label+'을(를) 발송했습니다 (Outlook)'); }
-function fxSet(r){ const y=window.scrollY; state.fxRange=r; render(); window.scrollTo(0,y); }
-function fxSeries(range){
-  const n={'1W':7,'1M':30,'3M':45,'1Y':52}[range]||30;
-  const stepDays={'1W':1,'1M':1,'3M':2,'1Y':7}[range]||1;
-  const usd=[],jpy=[],labels=[];
-  for(let i=n-1;i>=0;i--){
-    const d=new Date(TODAY); d.setDate(d.getDate()-i*stepDays); const t=n-1-i;
-    const u=1382 + Math.sin(t/4)*13 + Math.sin(t/9)*20 + (((t*37)%11)-5);
-    const j=905 + Math.cos(t/5)*8 + Math.sin(t/11)*12 + (((t*23)%9)-4);
-    usd.push(Math.round(u*10)/10); jpy.push(Math.round(j*10)/10);
-    labels.push((d.getMonth()+1)+'/'+d.getDate());
-  }
-  return {labels,usd,jpy};
-}
-function fxChart(h){
-  h=h||210; const s=fxSeries(state.fxRange||'1M');
-  const all=s.usd.concat(s.jpy); let mn=Math.min.apply(null,all), mx=Math.max.apply(null,all);
-  const pd=(mx-mn)*0.18||10; mn-=pd; mx+=pd;
-  const W=720,H=h,L=46,Rp=14,Tp=10,Bp=22, pw=W-L-Rp, ph=H-Tp-Bp, n=s.labels.length;
-  const X=i=> L + (n<=1?pw/2:i*(pw/(n-1)));
-  const Y=v=> Tp + ph - ((v-mn)/(mx-mn))*ph;
-  const line=arr=>arr.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
-  let grid=''; for(let g=0;g<=4;g++){ const yy=Tp+ph*g/4, val=mx-(mx-mn)*g/4; grid+=`<line x1="${L}" y1="${yy.toFixed(1)}" x2="${W-Rp}" y2="${yy.toFixed(1)}" stroke="var(--border)"/><text x="${L-6}" y="${(yy+3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--ink-3)">${Math.round(val)}</text>`; }
-  let xl=''; const stp=Math.max(1,Math.round(n/6)); for(let i=0;i<n;i+=stp){ xl+=`<text x="${X(i).toFixed(1)}" y="${H-6}" text-anchor="middle" font-size="10" fill="var(--ink-3)">${s.labels[i]}</text>`; }
-  const dots=(arr,lab)=>arr.map((v,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="6" fill="transparent"><title>${s.labels[i]} · ${lab} ${fmt(v)}원</title></circle>`).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:760px;display:block">${grid}<path d="${line(s.usd)}" fill="none" stroke="var(--teal)" stroke-width="2.2"/><path d="${line(s.jpy)}" fill="none" stroke="var(--navy-2)" stroke-width="2.2"/>${dots(s.usd,'USD')}${dots(s.jpy,'100엔')}${xl}</svg>`;
-}
 
-function vOvDash(){
-  setHead('대시보드','해외영업 · '+ovField());
-  const f=ovField(), orders=ovOrders.filter(o=>o.field===f);
-  const usdSales=orders.filter(o=>o.cur==='USD').reduce((s,o)=>s+o.amount,0);
-  const jpySales=orders.filter(o=>o.cur==='JPY').reduce((s,o)=>s+o.amount,0);
-  const noDep=orders.filter(o=>!o.dep).length;
-  const noBal=orders.filter(o=>o.dep&&!o.bal).length;
-  const inShip=orders.filter(o=>['생산','선적','수출서류'].includes(o.stage)).length;
-  const s=fxSeries(state.fxRange||'1M'); const usdT=s.usd[s.usd.length-1], jpyT=s.jpy[s.jpy.length-1];
-  const reorder=ovAgencies.filter(a=>a.field===f && a.lastDays>=a.cycle*0.9).sort((x,y)=>y.lastDays/y.cycle-x.lastDays/x.cycle);
-  const alerts=[
-    {tag:'danger',t:"PI 미발행 — P12760 (YOVANN'S CO)",s:'PO 수령됨 · PI 자동생성 대기'},
-    {tag:'warn',t:'잔금 미입금 — P12810 (Tokyo Medical)',s:'B/L 발행 예정 · 잔금 70% 확인'},
-    {tag:'warn',t:'선적 D-3 — P12747 (DAONSA)',s:'ETD 06/22 · 포워더 스케줄 확정'},
-  ];
-  return `
-  ${ovFieldTabs()}
-  <div class="kpis" style="margin-bottom:20px">
-    <div class="kpi"><div class="lab">수출 매출 (진행 PI)</div><div class="val">$${fmt(usdSales)}</div><div class="sub">${jpySales?'+ ¥'+fmt(jpySales)+' · ':''}${f}</div></div>
-    <div class="kpi"><div class="lab">선금 미입금 PI</div><div class="val ${noDep?'danger':''}">${noDep}건</div><div class="sub">PI 넘버 기준</div></div>
-    <div class="kpi"><div class="lab">잔금 미입금 PI</div><div class="val ${noBal?'warn':''}">${noBal}건</div><div class="sub">B/L 발행 후 70%</div></div>
-    <div class="kpi"><div class="lab">진행 선적</div><div class="val">${inShip}건</div><div class="sub">생산·선적·수출서류</div></div>
-  </div>
-  <div class="row">
-    <div class="card" style="flex:1.4;min-width:330px"><div class="pad">
-      <div class="seclabel">재주문 알림 (주문 주기 기준)</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
-        <thead><tr><th>거래처</th><th class="num">평균 주기</th><th class="num">경과</th><th>상태</th><th></th></tr></thead>
-        <tbody>${reorder.length?reorder.map(a=>{const due=a.lastDays>=a.cycle; return `<tr><td><b>${a.name}</b><div class="muted" style="font-size:11px">${a.country}</div></td><td class="num">${a.cycle}일</td><td class="num">${a.lastDays}일</td><td><span class="badge ${due?'danger':'warn'}">${due?'재주문 도래':'임박'}</span></td><td class="num"><button class="btn sm" data-view="ov-agencies">거래처 보기</button></td></tr>`;}).join(''):'<tr><td colspan="5" class="muted" style="padding:14px;text-align:center">재주문 임박 거래처 없음</td></tr>'}</tbody>
-      </table></div>
-      <div class="muted" style="font-size:12px;margin-top:8px">거래처별 평균 주문 주기 대비 경과일로 재주문 시점을 알려줍니다(국내 주문 주기 알림과 동일).</div>
-    </div></div>
-    <div class="card" style="flex:1;min-width:260px"><div class="pad">
-      <div class="seclabel">알림</div>
-      <div class="ledger-list">${alerts.map(x=>`<div class="li"><span class="dotmark" style="background:var(--${x.tag})"></span><div class="ti"><div style="font-size:13px;font-weight:600">${x.t}</div><div class="muted" style="font-size:12px">${x.s}</div></div></div>`).join('')}</div>
-    </div></div>
-  </div>
-  <div class="card" style="margin:18px 0"><div class="pad">
-    <div class="seclabel">PI 입금 현황 (선금 30 / 잔금 70)</div>
-    <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
-      <thead><tr><th>PI No.</th><th>거래처</th><th class="num">금액</th><th>선금</th><th>잔금</th><th>단계</th></tr></thead>
-      <tbody>${orders.map(o=>`<tr><td><b>${o.pi}</b></td><td>${o.agency}<div class="muted" style="font-size:11px">${o.country}</div></td><td class="num">${ovMoney(o.amount,o.cur)}</td><td>${payBadge(o.dep)}</td><td>${payBadge(o.bal)}</td><td><span class="badge ${o.stage==='정산'?'ok':o.stage==='PI 발행'?'muted':'info'}">${o.stage}</span></td></tr>`).join('')}</tbody>
-    </table></div>
-    <div class="muted" style="font-size:12px;margin-top:8px">입금 루틴이 거래처마다 달라, PI 넘버로 선금·잔금 입금 여부를 확인합니다.</div>
-  </div></div>
-  <div class="card"><div class="pad">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
-      <div class="seclabel" style="margin:0">환율 <span class="muted" style="font-weight:400">· USD ${fmt(usdT)}원 · 100엔 ${fmt(jpyT)}원</span></div>
-      <select class="search" style="width:auto;padding:5px 9px;font-size:12px" onchange="fxSet(this.value)">${[['1W','1주'],['1M','1개월'],['3M','3개월'],['1Y','1년']].map(([v,l])=>`<option value="${v}" ${(state.fxRange||'1M')===v?'selected':''}>${l}</option>`).join('')}</select>
-    </div>
-    ${fxChart(120)}
-    <div class="muted" style="font-size:11px;margin-top:2px">점에 마우스를 올리면 일자·환율이 표시됩니다. USD 기본 + 엔화 동시 표시. (실데이터는 환율 API 연동)</div>
-  </div></div>`;
-}
+/* 국내영업 포털 + 공통 화면 등록 (해외 화면은 overseas.js 가 등록) */
+Object.assign(VIEWS,{ 'home':vHome,'dom-dash':vDomDash,'dom-agencies':vAgencies,'dom-clients':vClients,'dom-pipeline':vPipeline,'agency':vAgencyDetail,
+  'dom-shipping':vShipping,'dom-returns':vReturns,'dom-return-new':vReturnNew,'dom-ledger':vLedger,'dom-shipstatus':vLedger,'dom-pricing':vPricing,
+  'dom-contracts':vContracts,'dom-feedback':vFeedbackDoc,'dom-followup':vFollowup,'cert-hub':vCertHub,'quote':vQuote,
+  'disc-dash':vDiscDash,'disc-leads':vDiscLeads,'disc-market':vMarket,'disc-search':vSearch,'lead':vLeadDetail,'proposal':vProposal,'doc':vDoc });
 
-function setPlMode(m){ state.plMode=m; render(); }
-function vOvPricelist(){
-  setHead('신규 고객','해외영업');
-  const mode=state.plMode||'기존', y=new Date(), pad=n=>String(n).padStart(2,'0');
-  const docno='BL-PL-'+y.getFullYear()+pad(y.getMonth()+1)+pad(y.getDate());
-  const newCustomers=[
-    {name:'MedGulf Trading', country:'사우디', src:'발굴 센터 이관', date:'06/13', sent:false},
-    {name:'AndesMed', country:'칠레', src:'발굴 센터 이관', date:'06/11', sent:true},
-  ];
-  const body = mode==='기존'
-    ? `<table><thead><tr><th>Code</th><th>Size</th><th class="num">Factory (USD)</th><th class="num">40ft 컨테이너가</th></tr></thead><tbody>${nealCatalog.map(g=>`<tr class="grouphdr"><td colspan="4"><b>${g.grp}</b> <span class="muted" style="font-weight:400">· MOQ ${g.moq}</span></td></tr>${g.items.map(it=>`<tr><td>${it[0]}</td><td>${it[1]}</td><td class="num">$${it[2].toFixed(2)}</td><td class="num">$${it[3].toFixed(2)}</td></tr>`).join('')}`).join('')}</tbody></table>`
-    : `<table><thead><tr><th>Item</th><th>Spec</th><th>Unit</th><th class="num">Unit Price (USD)</th></tr></thead><tbody>${[0,1,2,3,4,5].map(()=>`<tr>${[0,1,2,3].map(i=>`<td class="${i===3?'num':''}"><input style="border:none;border-bottom:1px dashed #bbb;width:${i===0?'150px':i===3?'90px':'70px'};font-family:inherit;font-size:12.5px;${i===3?'text-align:right':''}" placeholder="${['품명','규격','단위','단가'][i]}"></td>`).join('')}</tr>`).join('')}</tbody></table>`;
-  return `
-  <div class="pagehead"><div><div class="t">신규 고객</div><div class="d">발굴 센터에서 이관된 신규 고객 관리와 Price List 발송(아웃룩). OEM/ODM 신규 코드는 빈 양식에 수기 입력합니다.</div></div></div>
-  <div class="seclabel">신규 고객 (발굴 센터 등록)</div>
-  <div class="card ov" style="margin-bottom:18px"><table>
-    <thead><tr><th>고객</th><th>국가</th><th>등록 경로</th><th>등록일</th><th>Price List</th></tr></thead>
-    <tbody>${newCustomers.map(c=>`<tr><td><b>${c.name}</b></td><td>${c.country}</td><td><span class="badge muted">${c.src}</span></td><td class="muted">${c.date}</td><td>${c.sent?'<span class="badge ok">발송완료</span>':'<span class="badge warn">미발송</span>'}</td></tr>`).join('')}</tbody>
-  </table></div>
-  <div class="card" style="margin-bottom:16px"><div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-    <div style="display:flex;gap:6px">
-      <button class="btn" style="${mode==='기존'?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setPlMode('기존')">2026 NEAL 카탈로그</button>
-      <button class="btn" style="${mode==='신규'?'background:var(--navy);border-color:var(--navy);color:#fff':''}" onclick="setPlMode('신규')">OEM/ODM 신규 (빈 양식)</button>
+/* 사이드바 메뉴 — 포털 + 역할에 따라 그려집니다 */
+function renderNav(){
+  const nav=document.getElementById('nav'); if(!nav) return;
+  nav.innerHTML=PORTAL.nav.map(it=>{
+    if(it.grp) return `<div class="grp">${it.grp}</div>`;
+    if(!roleOk(it)) return '';
+    const ic=it.icon?`<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${ICONS[it.icon]}</svg>`:'';
+    return `<a data-view="${it.v}" class="${it.sub?'sub':''}">${ic}${it.t}</a>`;
+  }).join('');
+  const brand=document.getElementById('brand');
+  if(brand) brand.innerHTML=`<div class="logo">BL</div><div><b>${PORTAL.name}</b><span>${PORTAL.sub}</span></div>`;
+  // 포털 전환은 관리자만 (실제 사용자는 자기 포털만 보입니다)
+  const foot=document.getElementById('foot');
+  if(!foot) return;
+  const isAdmin = state.role==='관리자';
+  foot.innerHTML=`
+    ${isAdmin?`<a class="footlink" href="${OTHER.id==='domestic'?'index.html':'overseas.html'}">${OTHER.sub} →</a>`:''}
+    <div class="footrole"><span>역할</span>
+      <select id="roleSel">${ROLES.map(r=>`<option ${r===state.role?'selected':''}>${r}</option>`).join('')}</select>
     </div>
-    <div style="flex:1"></div>
-    <input class="search" id="plEmail" style="min-width:220px" placeholder="받는 사람 이메일 (Outlook)">
-    <button class="btn primary" onclick="ovSend('plEmail','Price List')">Outlook으로 발송</button>
-  </div></div>
-  <div class="doc" style="max-width:760px">
-    <div style="text-align:center"><b style="font-size:19px">BL TECH Co., Ltd.</b></div>
-    <div class="muted" style="text-align:center;font-size:11px;margin-bottom:14px">84, Toegyenonggong-ro, Chuncheon-si, Gangwon-do, KOREA · T +82-33-264-2686 · F +82-31-629-5216</div>
-    <h2 style="letter-spacing:.22em;padding-left:.22em">2026 PRICE LIST</h2>
-    <div class="meta"><div>To : <input value="${mode==='기존'?'New Customer':''}" style="border:none;border-bottom:1px solid #9aa;font-size:13px;width:200px;font-family:inherit;background:#FAFBFC;padding:2px"></div><div style="text-align:right">No. : ${docno}<br>Date : ${y.getFullYear()}-${pad(y.getMonth()+1)}-${pad(y.getDate())}</div></div>
-    <div class="intro">All prices in USD (FOB Busan). Factory Price / 40ft container (big-order) price. Payment: T/T 30% deposit / 70% after B/L. MOQ as noted. Validity 30 days.</div>
-    ${body}
-    <div class="reply">※ OEM/ODM 신규 코드는 빈칸으로 두고 수기 입력하며, 첫 등록 시 내부 품명과 매핑됩니다. HS Code·Incoterms·Bank·Signature는 PI 단계에서 포함됩니다.</div>
-  </div>`;
-}
-
-function setSelPO(i){ state.ovSelPO=i; state.ovPreview=null; render(); }
-function togglePreview(name){ state.ovPreview = (state.ovPreview===name?null:name); render(); }
-function attPreview(name, sel){
-  return `<div style="font-size:12px;color:var(--ink-2);margin-bottom:8px">${name} · 자동 인식 결과</div>
-   <div class="ov" style="border:1px solid var(--border);border-radius:6px"><table style="margin:0"><thead><tr><th>발주 코드</th><th class="num">수량</th><th>색상(끝자리)</th></tr></thead>
-   <tbody>${sel.pi.lines.map(l=>`<tr><td>${l[0].split(' → ')[0]}</td><td class="num">${fmt(l[2])}</td><td>${l[3]==='?'?'<span class="badge warn">확인</span>':l[3]}</td></tr>`).join('')}</tbody></table></div>
-   <div class="muted" style="font-size:11px;margin-top:8px">실제 구현 시 PDF·엑셀 원본이 이 영역에 그대로 렌더링됩니다.</div>`;
-}
-function vOvOrders(){
-  setHead('수주 · 생산','해외영업');
-  const idx=state.ovSelPO||0; const sel=ovPOInbox[idx]||ovPOInbox[0];
-  const steps=[['1','PO 수령','Outlook 수신'],['2','PI 발행','자동 인식'],['3','생산출고의뢰서','자동 인식'],['4','선적','포워더 메일'],['5','수출서류','PI·CI·PL·C/O'],['6','정산','PI별 입금']];
-  return `
-  <div class="pagehead"><div><div class="t">수주 · 생산</div><div class="d">메일 원문·첨부를 이 화면에서 바로 확인하고, 오른쪽에서 PI를 자동 생성합니다. (메일함을 따로 오갈 필요 없음)</div></div></div>
-  <div class="row" style="margin-bottom:18px">${steps.map(s=>`<div class="step"><div class="n">STEP ${s[0]}</div><div class="h">${s[1]}</div><div class="muted" style="font-size:11.5px;margin-top:2px">${s[2]}</div></div>`).join('')}</div>
-  <div class="seclabel">PO 수신함 (Outlook)</div>
-  <div class="card ov" style="margin-bottom:16px"><table>
-    <thead><tr><th>발신</th><th>제목</th><th>첨부</th><th>수신일</th><th>코드 매칭</th></tr></thead>
-    <tbody>${ovPOInbox.map((p,i)=>`<tr class="clickable" style="${i===idx?'background:var(--teal-soft)':''}" onclick="setSelPO(${i})"><td><b>${p.from}</b><div class="muted" style="font-size:11px">${p.mail}</div></td><td>${p.subj}</td><td class="num">${p.atts.length}개</td><td class="muted">${p.date}</td><td>${p.matched?'<span class="badge ok">매칭 완료</span>':'<span class="badge danger">미매칭 있음</span>'}</td></tr>`).join('')}</tbody>
-  </table></div>
-  <div class="row">
-    <div class="card" style="flex:1.2;min-width:330px"><div class="pad">
-      <div class="seclabel">메일 원문</div>
-      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${sel.subj}</div>
-      <div class="muted" style="font-size:12px;margin-bottom:10px">From ${sel.from} &lt;${sel.mail}&gt; · ${sel.date}</div>
-      <div style="white-space:pre-wrap;font-size:12.5px;line-height:1.65;border:1px solid var(--border);border-radius:8px;padding:13px;background:#fff">${sel.body}</div>
-      <div style="margin-top:12px"><div class="muted" style="font-size:12px;margin-bottom:6px">첨부파일 (클릭하면 아래에 미리보기)</div>
-        ${sel.atts.map(a=>`<button class="btn sm" style="${state.ovPreview===a.name?'border-color:var(--teal);color:var(--teal-d)':''}" onclick="togglePreview('${a.name}')">📎 ${a.name}</button>`).join(' ')}
-      </div>
-      ${state.ovPreview?`<div style="margin-top:12px;border:1px solid var(--teal);border-radius:8px;overflow:hidden">
-        <div style="background:var(--teal-soft);color:var(--teal-d);font-size:12px;font-weight:600;padding:7px 11px">미리보기 · ${state.ovPreview}</div>
-        <div style="padding:12px">${attPreview(state.ovPreview, sel)}</div></div>`:''}
-    </div></div>
-    <div class="card" style="flex:1;min-width:300px"><div class="pad">
-      <div class="seclabel">PI 자동 생성</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;margin-bottom:8px"><div><b>${sel.pi.no}</b> · ${sel.pi.inco} · ${sel.pi.cur}</div><div>${sel.matched?'<span class="badge ok">자동 인식 완료</span>':'<span class="badge danger">미매칭 있음</span>'}</div></div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
-        <thead><tr><th>코드 (매핑)</th><th>품명</th><th class="num">수량</th><th>색상</th></tr></thead>
-        <tbody>${sel.pi.lines.map(l=>`<tr><td style="font-size:11.5px">${l[0]}</td><td>${l[1]}</td><td class="num">${fmt(l[2])}</td><td>${l[3]==='?'?'<span class="badge warn">확인</span>':l[3]}</td></tr>`).join('')}</tbody>
-      </table></div>
-      <div class="quick" style="margin-top:12px">
-        ${sel.matched?'':`<button class="btn" onclick="toast('미매칭 코드 등록 (이후 자동 매칭)')">미매칭 코드 등록</button>`}
-        <button class="btn primary" onclick="toast('${sel.pi.no} PI 발행 → 생산출고의뢰서 생성')">PI 발행 · 생산출고의뢰서</button>
-      </div>
-      <div class="muted" style="font-size:11.5px;margin-top:10px">발주코드↔내부 품명 매핑은 첫 등록만 Price List(신규 고객)에서 수기 입력하고, 이후 PO→PI 단계에서 동일하게 자동 인식됩니다.</div>
-    </div></div>
-  </div>`;
-}
-
-function vOvAgencies(){
-  setHead('거래처 관리','해외영업 · '+ovField());
-  const f=ovField(), list=ovAgencies.filter(a=>a.field===f);
-  const active=ovOrders.filter(o=>o.field===f && o.stage!=='정산');
-  const byAgency={}; active.forEach(o=>{(byAgency[o.agency]=byAgency[o.agency]||[]).push(o);});
-  const projAgencies=Object.keys(byAgency);
-  const unpaid=ovOrders.filter(o=>o.field===f && (!o.dep||!o.bal));
-  return `
-  ${ovFieldTabs()}
-  <div class="pagehead"><div><div class="t">거래처 관리</div><div class="d">${f} · 거래처 정보와 진행 프로젝트, 선금/잔금 현황을 한 화면에서 봅니다.</div></div></div>
-  <div class="seclabel">진행 중인 프로젝트 (거래처별)</div>
-  <div class="row" style="margin-bottom:22px">${projAgencies.length?projAgencies.map(name=>{const ors=byAgency[name]; const a=ovAgencies.find(x=>x.name===name)||{}; return `
-    <div style="flex:1;min-width:240px;border:1.5px solid var(--teal);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)">
-      <div style="padding:10px 13px;background:var(--teal);color:#fff;font-weight:700;font-size:13px">${name} <span style="font-weight:400;opacity:.85">· ${a.country||''}</span></div>
-      <div style="padding:8px 13px;background:#fff">${ors.map(o=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)"><div><b style="font-size:12.5px">${o.pi}</b> <span class="muted" style="font-size:11px">ETD ${o.etd}</span><div class="muted" style="font-size:11px">${ovMoney(o.amount,o.cur)}</div></div><span class="badge info">${o.stage}</span></div>`).join('')}</div>
-    </div>`;}).join(''):'<div class="muted">진행 중인 프로젝트가 없습니다.</div>'}</div>
-  <div class="row">
-    <div class="card" style="flex:1.6;min-width:340px"><div class="pad">
-      <div class="seclabel">거래처 리스트</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
-        <thead><tr><th>거래처</th><th>국가</th><th>인코텀즈</th><th>결제</th><th>통화</th><th>진행 PI</th></tr></thead>
-        <tbody>${list.length?list.map(a=>{const ors=ovOrders.filter(o=>o.agency===a.name); return `<tr class="clickable" onclick="ovStatement('${a.id}')"><td><b>${a.name}</b></td><td>${a.country}</td><td><span class="badge muted">${a.inco}</span></td><td>${a.pay}</td><td>${a.cur}</td><td>${ors.length}건</td></tr>`;}).join(''):'<tr><td colspan="6" class="muted" style="padding:14px;text-align:center">해당 분야 거래처 없음</td></tr>'}</tbody>
-      </table></div>
-      <div class="muted" style="font-size:12px;margin-top:8px">행을 클릭하면 거래처별 PI 정산(선금/잔금) 현황이 열립니다.</div>
-    </div></div>
-    <div class="card" style="flex:1;min-width:260px"><div class="pad">
-      <div class="seclabel">선금 / 잔금 현황</div>
-      <div class="ledger-list">${unpaid.length?unpaid.map(o=>`<div class="li"><span class="dotmark" style="background:var(--${!o.dep?'danger':'warn'})"></span><div class="ti"><div style="font-size:13px;font-weight:600">${o.agency} · ${o.pi}</div><div class="muted" style="font-size:12px">${!o.dep?'선금 미입금':'잔금 미입금'} · ${ovMoney(o.amount,o.cur)}</div></div></div>`).join(''):'<div class="muted" style="font-size:12.5px">미입금 건 없음</div>'}</div>
-    </div></div>
-  </div>`;
-}
-function ovStatement(id){
-  const a=ovAgencies.find(x=>x.id===id); if(!a) return;
-  const ors=ovOrders.filter(o=>o.agency===a.name);
-  openModal(`<div class="mh"><b>${a.name} · 정산 현황</b><button class="x" onclick="closeModal()">×</button></div>
-    <div class="mb">
-      <div class="muted" style="font-size:12.5px;margin-bottom:12px">${a.country} · ${a.inco} · ${a.pay} · ${a.cur}</div>
-      <div class="ov" style="border:1px solid var(--border);border-radius:8px;overflow-x:auto"><table>
-        <thead><tr><th>PI No.</th><th class="num">금액</th><th>선금 30%</th><th>잔금 70%</th><th>단계</th></tr></thead>
-        <tbody>${ors.length?ors.map(o=>`<tr><td><b>${o.pi}</b></td><td class="num">${ovMoney(o.amount,o.cur)}</td><td>${payBadge(o.dep)}</td><td>${payBadge(o.bal)}</td><td class="muted">${o.stage}</td></tr>`).join(''):'<tr><td colspan="5" class="muted" style="padding:12px;text-align:center">진행 PI 없음</td></tr>'}</tbody>
-      </table></div>
-    </div>
-    <div class="mf"><button class="btn" onclick="closeModal()">닫기</button></div>`);
-}
-
-function setShipAgency(id){ state.shipAgency=id; render(); }
-function vOvShipping(){
-  setHead('선적 · 물류','해외영업');
-  const aid=state.shipAgency||'o1'; const a=ovAgencies.find(x=>x.id===aid)||ovAgencies[0];
-  const routeStages=['공장 출고','수출통관','POL 선적','주(主)운송','POD 양하','수입통관','도착지 인도'];
-  const incoResp={'EXW':{upto:0,note:'공장 인도 — 이후 전 과정 매수인 수배'},'FOB':{upto:2,note:'지정 선적항 본선 적재까지 매도인'},'CIF':{upto:4,note:'도착항까지 운임·보험 매도인 부담(위험은 본선 적재 시 이전)'},'DAP':{upto:6,ex:[5],note:'도착지 인도까지 매도인 · 수입통관/관세는 매수인'},'DDP':{upto:6,note:'수입통관·관세까지 전 과정 매도인'}};
-  const ir=incoResp[a.inco]||incoResp['FOB'];
-  const caseKey=a.fwd.indexOf('고객사')>=0?'fob-customer':(a.fwd.indexOf('항공')>=0?'dap-air':'fob-korea');
-  const cases={
-    'fob-customer':{label:'FOB · 고객사 포워더 컨택요청', to:'rakesh@surgicals.in', subj:'Cargo Ready Notice',
-      body:`Hello,\n\nThe products will be ready on June 18th.\n\n10 pallets\n110*110*195cm  6 pallets\n110*110*215cm  1 pallet\n(외 3 pallets)\nTotal: 4,944.20 kg\n\nPlease contact your forwarder and arrange the vessel.\n\nThank you.\nBL TECH Overseas Sales`},
-    'fob-korea':{label:'FOB/EXW · 지정 한국 포워더 스케줄 요청', to:'choi@ocean-fwd.co.kr', subj:'ECD 해상 FCL 스케줄 문의',
-      body:`안녕하세요 책임님,\n비엘테크 해외영업팀입니다.\n\nECD 해상 FCL 스케줄 문의드립니다.\n\nEXW / NY PORT\nFCL 20FT x 1\n3,221.30 KG\nCARGO READY : 06/18 (목) — 하루 이틀 조정 가능\n\n가능한 타겟 스케줄 먼저 공유 부탁드립니다.\n감사합니다.`},
-    'dap-air':{label:'DAP · 항공 지정 포워더 스케줄+운임', to:'song@air-fwd.co.kr', subj:'항공 DAP 스케줄·운임 문의',
-      body:`안녕하세요 부장님,\n비엘테크 해외영업팀입니다.\n\n항공 DAP 스케줄 및 운임 문의드립니다 (주말 도착 제외).\n\n1 pallet / 110*110*159cm / 471.04 kg\n출고 가능일 : 04/13 (월)\n\n[고객사 주소]\nYOVANN'S CO. 19 RUE VERTE 76000 ROUEN - FRANCE\n\n스케줄과 운임 함께 회신 부탁드립니다.\n감사합니다.`},
-  };
-  const cur=cases[caseKey];
-  return `
-  <div class="pagehead"><div><div class="t">선적 · 물류</div><div class="d">거래처를 선택하면 인코텀즈와 포워더 운영 방식, 우리가 책임지는 구간이 바로 표시됩니다.</div></div></div>
-  <div class="card" style="margin-bottom:16px"><div class="pad">
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-      <span class="muted" style="font-size:12px">거래처</span>
-      <select class="search" style="width:auto" onchange="setShipAgency(this.value)">${ovAgencies.map(x=>`<option value="${x.id}" ${x.id===aid?'selected':''}>${x.name} · ${x.country}</option>`).join('')}</select>
-      <span class="badge teal">인코텀즈 ${a.inco}</span><span class="badge muted">결제 ${a.pay}</span><span class="badge muted">${a.cur}</span>
-    </div>
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px">
-      <div style="font-size:12.5px;font-weight:700;margin-bottom:3px">인코텀즈 ${a.inco} — 우리(매도인) 책임 구간</div>
-      <div class="muted" style="font-size:12px;margin-bottom:12px">${ir.note} · 포워더 운영: ${a.fwd}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        ${routeStages.map((s,i)=>{const own=i<=ir.upto && !((ir.ex||[]).includes(i)); return `<div style="padding:9px 9px;border-radius:7px;font-size:11.5px;font-weight:600;${own?'background:var(--teal);color:#fff':'background:#fff;color:var(--ink-3);border:1px solid var(--border)'}">${s}</div>${i<routeStages.length-1?'<span style="color:var(--ink-3)">›</span>':''}`;}).join('')}
-      </div>
-      <div style="display:flex;gap:16px;margin-top:11px;font-size:11.5px"><span><span style="display:inline-block;width:11px;height:11px;background:var(--teal);border-radius:3px;vertical-align:middle"></span> 매도인(우리) 책임</span><span><span style="display:inline-block;width:11px;height:11px;background:#fff;border:1px solid var(--border);border-radius:3px;vertical-align:middle"></span> 매수인 책임</span></div>
-    </div>
-    <div class="quick" style="margin-top:14px">
-      <button class="btn primary" onclick="toast('Packing List 생성 (PI 데이터 자동 반영)')">PL 생성</button>
-      <button class="btn" onclick="toast('C/O(원산지증명) 발급 요청 — 상공회의소')">C/O 요청</button>
-    </div>
-  </div></div>
-  <div class="seclabel">포워더 요청 (서브) · ${cur.label}</div>
-  <div class="card"><div class="pad">
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-      <div style="flex:1;min-width:160px"><label class="muted" style="font-size:12px">받는 사람</label><input class="search" id="shipTo" value="${cur.to}" style="width:100%;margin-top:4px"></div>
-      <div style="flex:2;min-width:220px"><label class="muted" style="font-size:12px">제목</label><input class="search" id="shipSubj" value="${cur.subj}" style="width:100%;margin-top:4px"></div>
-    </div>
-    <textarea id="shipBody" style="width:100%;min-height:230px;font-family:inherit;font-size:12.5px;line-height:1.6;border:1px solid var(--border-2);border-radius:8px;padding:12px;resize:vertical;box-sizing:border-box">${cur.body}</textarea>
-    <div class="quick" style="margin-top:12px"><button class="btn" onclick="toast('PI · Packing List 자동 첨부 (프로토타입)')">서류 첨부</button><button class="btn primary" onclick="ovSend('shipTo','포워더 메일')">Outlook으로 발송</button></div>
-  </div></div>`;
-}
-
-function vOvDocs(){
-  setHead('수출서류','해외영업');
-  const gen=['PI (Proforma Invoice)','CI (Commercial Invoice)','Packing List','C/O (원산지증명)'];
-  const up=['B/L (선하증권)','수출신고필증','보험증권','CFS (자유판매증명)'];
-  return `
-  <div class="pagehead"><div><div class="t">수출서류</div><div class="d">PI·CI·Packing List·C/O는 포털에서 생성하고, B/L·수출신고필증·보험증권·CFS는 업로드 보관합니다.</div></div></div>
-  <div class="row">
-    <div class="card" style="flex:1;min-width:300px"><div class="pad">
-      <div class="seclabel">포털 생성 서류</div>
-      ${gen.map(g=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border)"><div style="font-size:13px;font-weight:600">${g}</div><button class="btn sm primary" onclick="toast('${g} 생성 (PI 데이터 자동 반영)')">생성</button></div>`).join('')}
-      <div class="muted" style="font-size:12px;margin-top:10px">PI 항목(HS코드·인코텀즈·통화·은행정보·서명)이 각 서류에 자동 반영됩니다.</div>
-    </div></div>
-    <div class="card" style="flex:1;min-width:300px"><div class="pad">
-      <div class="seclabel">업로드 보관 (외부 발행)</div>
-      ${up.map(u=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border)"><div style="font-size:13px;font-weight:600">${u}</div><label class="btn sm" style="cursor:pointer"><input type="file" accept=".pdf,.xls,.xlsx,image/*" style="display:none" onchange="poUpload(this)">업로드</label></div>`).join('')}
-      <div id="poFiles" style="margin-top:10px"></div>
-      <div class="muted" style="font-size:12px;margin-top:10px">포워더·관세사 등 외부 발행 서류는 PDF·엑셀·사진으로 업로드해 PI별로 보관합니다.</div>
-    </div></div>
-  </div>`;
+    <div class="footnote">Phase 1 프로토타입 · 샘플 데이터</div>`;
 }
 
 function render(){
   const c=document.getElementById('content');
-  const map={ 'home':vHome, 'dom-dash':vDomDash,'dom-agencies':vAgencies,'dom-clients':vClients,'dom-pipeline':vPipeline,'agency':vAgencyDetail,
-    'dom-shipping':vShipping,'dom-returns':vReturns,'dom-return-new':vReturnNew,'dom-ledger':vLedger,'dom-shipstatus':vLedger,'dom-pricing':vPricing,'dom-contracts':vContracts,'dom-feedback':vFeedbackDoc,'dom-followup':vFollowup,'cert-hub':vCertHub,'quote':vQuote,
-    'ov-dash':vOvDash,'ov-pricelist':vOvPricelist,'ov-orders':vOvOrders,'ov-agencies':vOvAgencies,'ov-shipping':vOvShipping,'ov-docs':vOvDocs,
-    'disc-dash':vDiscDash,'disc-leads':vDiscLeads,'disc-market':vMarket,'disc-search':vSearch,'lead':vLeadDetail,'proposal':vProposal,'doc':vDoc };
-  c.innerHTML=(map[state.view]||vDomDash)();
+  renderNav();
+  if(!portalOk()){
+    c.innerHTML=`<div class="card" style="max-width:520px;margin:40px auto"><div class="pad" style="text-align:center">
+      <div style="font-size:34px;margin-bottom:8px">🔒</div>
+      <div style="font-weight:700;font-size:15px;margin-bottom:6px">이 포털에 접근 권한이 없습니다</div>
+      <div class="muted" style="font-size:13px;line-height:1.7">현재 역할 <b>${state.role}</b> 은(는) ${PORTAL.sub}을 볼 수 없어요.<br>${OTHER.sub}로 이동하거나 관리자에게 권한을 요청하세요.</div>
+      <a href="${OTHER.id==='domestic'?'index.html':'overseas.html'}" class="btn primary" style="margin-top:14px;display:inline-block;text-decoration:none">${OTHER.sub} 로 이동</a>
+    </div></div>`;
+    const tb0=document.getElementById('tabbar'); if(tb0) tb0.innerHTML='';
+    return;
+  }
+  c.innerHTML=(VIEWS[state.view]||VIEWS[PORTAL.home]||vDomDash)();
   c.scrollTop=0;
   const ch=document.getElementById('mktChat'); if(ch) ch.scrollTop=ch.scrollHeight;
   // active nav (하위 화면은 부모 메뉴를 켬)
@@ -1787,7 +1672,7 @@ function render(){
   document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active', a.dataset.view===activeView));
   // 열린 화면 탭바
   const tb=document.getElementById('tabbar');
-  if(tb){ tb.innerHTML=state.tabs.map(t=>`<div class="tab ${t.id===state.activeTab?'active':''} ${t.view==='dom-dash'?'home':''} ${navParent[t.view]?'':'pri'}" data-tabid="${t.id}"><span class="lb">${t.label}</span>${t.view==='dom-dash'?'':`<span class="x" data-closetab="${t.id}" title="닫기">×</span>`}</div>`).join(''); }
+  if(tb){ tb.innerHTML=state.tabs.map(t=>`<div class="tab ${t.id===state.activeTab?'active':''} ${t.view===PORTAL.home?'home':''} ${navParent[t.view]?'':'pri'}" data-tabid="${t.id}"><span class="lb">${t.label}</span>${t.view===PORTAL.home?'':`<span class="x" data-closetab="${t.id}" title="닫기">×</span>`}</div>`).join(''); }
 }
 const TAB_LABELS={ home:'메인 화면','dom-dash':'대시보드','dom-agencies':'미수금 관리','dom-clients':'거래처 등록','dom-shipping':'출고 현황','dom-returns':'반품 · 교환 처리','dom-return-new':'반품 등록','dom-ledger':'원장 · 채권채무조회서 발송','dom-shipstatus':'출고현황 발송','dom-pricing':'보험수가표 · 견적서','dom-contracts':'계약 관리','dom-feedback':'피드백 요청서','dom-followup':'Follow-up','dom-pipeline':'파이프라인','quote':'견적서 작성','cert-hub':'인증·규제 허브',
   'ov-dash':'해외 현황','ov-pricelist':'신규 고객','ov-orders':'수주·생산','ov-agencies':'해외 거래처','ov-shipping':'선적·물류','ov-docs':'수출서류',
@@ -1799,6 +1684,8 @@ function tabMeta(v){
   return {id:v, label:TAB_LABELS[v]||v, ctx:null};
 }
 function go(v){
+  if(!allowedView(v)){ toast('이 화면은 '+OTHER.sub+'에 있습니다'); return; }  // 포털 경계
+  if(!viewRoleOk(v)){ toast('‘'+state.role+'’ 역할은 이 화면을 볼 수 없습니다'); return; }  // 역할 경계
   state.view=v;
   const m=tabMeta(v);
   const t=state.tabs.find(x=>x.id===m.id);
@@ -1816,14 +1703,16 @@ function closeTab(id){
   const i=state.tabs.findIndex(x=>x.id===id); if(i<0) return;
   const wasActive=state.activeTab===id;
   state.tabs.splice(i,1);
-  if(!state.tabs.length){ go('dom-dash'); return; }
+  if(!state.tabs.length){ go(PORTAL.home); return; }
   if(wasActive) activateTab(state.tabs[Math.max(0,i-1)].id);
   else render();
 }
 
 /* ---------------- events ---------------- */
 document.getElementById('nav').addEventListener('click',e=>{ const a=e.target.closest('a'); if(a){ go(a.dataset.view);} });
-document.getElementById('brand').addEventListener('click',()=>go('dom-dash'));
+document.getElementById('brand').addEventListener('click',()=>go(PORTAL.home));
+// 역할 전환 (프로토타입) — Auth 붙이면 로그인 사용자의 role 클레임으로 대체됩니다
+document.getElementById('side').addEventListener('change',e=>{ if(e.target.id==='roleSel'){ state.role=e.target.value; render(); toast('역할 전환 — '+state.role); } });
 document.getElementById('tabbar').addEventListener('click',e=>{
   const close=e.target.closest('[data-closetab]'); if(close){ e.stopPropagation(); closeTab(close.dataset.closetab); return; }
   const tab=e.target.closest('[data-tabid]'); if(tab) activateTab(tab.dataset.tabid);
@@ -1855,4 +1744,12 @@ function syncMenu(){ document.getElementById('menuBtn').style.display=mq.matches
 mq.addEventListener('change',syncMenu); syncMenu();
 document.getElementById('menuBtn').addEventListener('click',()=>document.getElementById('side').classList.toggle('open'));
 
-render();
+/* 부팅 — 포털 기본 화면으로 시작.
+   setTimeout(0) 으로 미뤄서, overseas.js 같은 포털 스크립트가 VIEWS 등록을 끝낸 뒤 실행되게 합니다. */
+function boot(){
+  const h=PORTAL.home;
+  state.view=h; state.activeTab=h;
+  state.tabs=[{id:h, view:h, label:TAB_LABELS[h]||'대시보드', ctx:null}];
+  render();
+}
+setTimeout(boot,0);

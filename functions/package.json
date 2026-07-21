@@ -1,0 +1,13 @@
+{
+  "name": "bltech-portal-functions",
+  "description": "사내 규정 챗봇 API (/api/chat)",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.2",
+    "firebase-functions": "^6.3.0"
+  },
+  "private": true
+}

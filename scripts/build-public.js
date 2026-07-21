@@ -68,3 +68,15 @@ for(const f of shipped){
   }
 }
 console.log('비밀 파일·키 문자열 검사 통과');
+
+/* 사내 규정 문서를 함수 쪽으로 동기화 (단일 소스: data/regulations.md)
+   ★ Hosting(public/)에는 넣지 않습니다 — 규정은 공개 대상이 아닙니다. */
+const rulesSrc = path.join(ROOT, 'data', 'regulations.md');
+const rulesDst = path.join(ROOT, 'functions', 'regulations.md');
+if(fs.existsSync(rulesSrc)){
+  fs.mkdirSync(path.dirname(rulesDst), { recursive:true });
+  fs.copyFileSync(rulesSrc, rulesDst);
+  console.log('functions/regulations.md 동기화 완료');
+}else{
+  console.error('경고: data/regulations.md 가 없습니다 — 챗봇이 규정을 못 읽습니다');
+}

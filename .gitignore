@@ -34,3 +34,7 @@ firebase-debug.log
 # Hosting 배포용 생성물 (scripts/build-public.js 가 만듭니다)
 public/
 .firebase/
+
+# Functions 생성물
+functions/node_modules/
+functions/regulations.md

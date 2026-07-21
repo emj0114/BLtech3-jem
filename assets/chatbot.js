@@ -20,7 +20,59 @@ const BOT_MAX_BYTES = 10 * 1024 * 1024;                                   // 파
 const BOT_OK_MIME = ['image/png','image/jpeg','image/webp','image/gif','application/pdf'];
 
 // 대화·첨부는 UI 임시상태 (새로고침 시 초기화, Firestore 대상 아님)
-state.bot = { open:false, msgs:[], files:[], draft:'', busy:false, error:null, unread:false };
+state.bot = { open:false, msgs:[], files:[], draft:'', busy:false, error:null, unread:false,
+  auth:{ mode:'loading', user:null, err:null } };   // mode: loading | none(로컬) | required(배포)
+
+/* ---------- Firebase 로그인 ----------
+   배포본(Firebase Hosting)에서는 /__/firebase/init.json 이 설정을 자동 제공합니다.
+   → 그 값이 있으면 "로그인 필수" 모드로 동작하고, ID 토큰을 서버에 보냅니다.
+   로컬(localhost)에는 그 경로가 없으므로 로그인 없이 그대로 씁니다.
+   ※ 여기 나오는 apiKey 는 비밀이 아닙니다(공개용). 실제 보호는 함수의 토큰 검증 + 허용명단입니다. */
+let botAuth = null;
+(async function initAuth(){
+  try{
+    const r = await fetch('/__/firebase/init.json');
+    if(!r.ok) throw new Error('no config');
+    const cfg = await r.json();
+    const [{ initializeApp }, authMod] = await Promise.all([
+      import('https://www.gstatic.com/firebasejs/11.2.0/firebase-app.js'),
+      import('https://www.gstatic.com/firebasejs/11.2.0/firebase-auth.js'),
+    ]);
+    const app = initializeApp(cfg);
+    botAuth = { ...authMod, auth: authMod.getAuth(app) };
+    state.bot.auth.mode = 'required';
+    botAuth.onAuthStateChanged(botAuth.auth, u=>{
+      state.bot.auth.user = u ? { email:u.email, name:u.displayName, photo:u.photoURL } : null;
+      renderBot();
+    });
+  }catch{
+    state.bot.auth.mode = 'none';        // 로컬 개발 — 로그인 없이 사용
+  }
+  renderBot();
+})();
+
+async function botLogin(){
+  if(!botAuth) return;
+  state.bot.auth.err=null; renderBot();
+  try{
+    const p = new botAuth.GoogleAuthProvider();
+    p.setCustomParameters({ prompt:'select_account' });
+    await botAuth.signInWithPopup(botAuth.auth, p);
+  }catch(e){
+    if(e?.code !== 'auth/popup-closed-by-user' && e?.code !== 'auth/cancelled-popup-request')
+      state.bot.auth.err = '로그인에 실패했습니다: ' + (e?.code || e?.message || '');
+    renderBot();
+  }
+}
+async function botLogout(){
+  if(!botAuth) return;
+  await botAuth.signOut(botAuth.auth);
+  state.bot.msgs=[]; state.bot.files=[]; renderBot();
+}
+async function botIdToken(){
+  if(!botAuth || !botAuth.auth.currentUser) return null;
+  return await botAuth.auth.currentUser.getIdToken();
+}
 
 const BOT_SAMPLES = ['연차 며칠?', '재택근무 조건', '출장 일비'];
 
@@ -74,10 +126,12 @@ function botAsk(q){
   state.bot.files=[]; state.bot.draft=''; state.bot.busy=true; state.bot.error=null;
   renderBot();
 
-  fetch(CHAT_ENDPOINT,{
-    method:'POST', headers:{'Content-Type':'application/json'},
+  botIdToken().then(token=>fetch(CHAT_ENDPOINT,{
+    method:'POST',
+    headers: token ? {'Content-Type':'application/json','Authorization':'Bearer '+token}
+                   : {'Content-Type':'application/json'},
     body:JSON.stringify({ messages: state.bot.msgs })
-  })
+  }))
   .then(async r=>{ const d=await r.json().catch(()=>({}));
     if(r.status===404 || r.status===501){
       // Hosting 만 배포된 상태 — 챗봇 백엔드(Cloud Functions)가 아직 없음
@@ -104,6 +158,8 @@ function botAttachChip(f, i){
 
 function botPanelHTML(){
   const b=state.bot;
+  // 배포본(required)에서 로그인 안 했으면 로그인 화면. 로컬(none)은 그대로 사용.
+  const needLogin = b.auth.mode==='required' && !b.auth.user;
   const bubbles = b.msgs.map(m=>{
     const mine = m.role==='user';
     const atts = (m.files&&m.files.length)
@@ -124,10 +180,21 @@ function botPanelHTML(){
       <svg width="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       <b>사내 규정 챗봇</b>
       <div style="flex:1"></div>
+      ${b.auth.user?`<button class="botico" onclick="botLogout()" title="${escapeHtml(b.auth.user.email)} · 로그아웃"><svg width="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>`:''}
       ${b.msgs.length?`<button class="botico" onclick="botReset()" title="대화 지우기"><svg width="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button>`:''}
       <button class="botico" onclick="botToggle()" title="닫기"><svg width="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
     </div>
 
+    ${needLogin ? `
+    <div class="botbody" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px">
+      <svg width="38" viewBox="0 0 24 24" fill="none" stroke="var(--ink-2)" stroke-width="1.6"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <div style="font-size:13px;line-height:1.8;color:var(--ink-2)">
+        <b style="color:var(--ink)">회사 계정으로 로그인하세요</b><br>
+        <span style="font-size:12px">허용된 직원만 사용할 수 있습니다</span>
+      </div>
+      <button class="btn primary" onclick="botLogin()">Google 계정으로 로그인</button>
+      ${b.auth.err?`<div class="boterr" style="margin-top:4px">⚠️ ${escapeHtml(b.auth.err)}</div>`:''}
+    </div>` : `
     <div id="botLog" class="botbody">
       ${b.msgs.length?bubbles:empty}
       ${b.busy?`<div class="botrow"><div class="botbub muted">${b.msgs.some(m=>m.files&&m.files.length)?'문서 판독 중…':'답변 작성 중…'}</div></div>`:''}
@@ -146,7 +213,7 @@ function botPanelHTML(){
       <button class="botsend" onclick="botAsk()" ${b.busy?'disabled':''} title="보내기">
         <svg width="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>
       </button>
-    </div>
+    </div>`}
   </div>`;
 }
 

@@ -194,8 +194,10 @@
   .frow > label{width:104px;flex:0 0 104px;font-size:12.5px}
   .frow > input,.frow > select{flex:1;min-width:0}
 
-  /* flex/그리드 안에서 입력 요소가 화면을 밀어내지 않도록 (모바일 가로 넘침 주범) */
-  input,select,textarea{max-width:100%}
+  /* flex/그리드 안에서 입력 요소가 화면을 밀어내지 않도록 (모바일 가로 넘침 주범)
+     min-width:0 이 없으면 input 이 기본 최소폭 아래로 안 줄어들어,
+     옆 버튼을 컨테이너 밖으로 밀어냅니다. */
+  input,select,textarea{max-width:100%;min-width:0}
   .ov{overflow-x:auto;-webkit-overflow-scrolling:touch}
 
   /* 사이드바 뒤 배경 — 모바일에서 메뉴 열었을 때 바깥 탭하면 닫힘 */

@@ -806,9 +806,9 @@ function vClients(){
     </div></div>
     <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
       <div class="card"><div class="pad">
-        <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px;flex-wrap:wrap;min-width:0">
           <span class="badge ${isNew?'teal':'muted'}">${isNew?(ocr?'신규 · 자동 인식':'신규 등록'):'거래처코드 '+(c.code||'')}</span>
-          <b style="font-size:15px">${isNew?(c.name||'새 거래처'):(c.name||'')}</b>
+          <b style="font-size:15px;min-width:0;overflow-wrap:anywhere">${isNew?(c.name||'새 거래처'):(c.name||'')}</b>
         </div>
         ${fld('c_name','거래처명',c.name)}
         ${fld('c_short','거래처약칭',c.short)}
@@ -1747,8 +1747,17 @@ const navBackdrop=document.createElement('div');
 navBackdrop.className='navbackdrop';
 document.body.appendChild(navBackdrop);
 function navOpen(on){
-  document.getElementById('side').classList.toggle('open', on);
+  const side=document.getElementById('side');
+  side.classList.toggle('open', on);
   document.body.classList.toggle('navopen', on);
+  // 클래스만으로 두지 않고 인라인으로도 지정합니다.
+  // (일부 환경에서 상태 클래스 규칙이 반영되지 않아 메뉴가 안 열리는 경우가 있었음)
+  // 열 때만 인라인으로 밀어넣고, 닫을 때는 인라인을 지워 CSS 기본값으로 되돌립니다.
+  // (닫힘 상태를 인라인으로 박아두면 데스크톱으로 넓어졌을 때 사이드바가 숨은 채 남습니다)
+  if(on && mq.matches) side.style.transform = 'translateX(0)';
+  else                 side.style.transform = '';
+  navBackdrop.style.opacity       = on ? '1' : '0';
+  navBackdrop.style.pointerEvents = on ? 'auto' : 'none';
 }
 document.getElementById('menuBtn').addEventListener('click',()=>navOpen(!document.getElementById('side').classList.contains('open')));
 navBackdrop.addEventListener('click',()=>navOpen(false));

@@ -194,7 +194,9 @@
   .ov{overflow-x:auto;-webkit-overflow-scrolling:touch}
 
   /* 사이드바 뒤 배경 — 모바일에서 메뉴 열었을 때 바깥 탭하면 닫힘 */
-  .navbackdrop{position:fixed;inset:0;background:rgba(16,33,46,.45);z-index:29;opacity:0;pointer-events:none;transition:.2s}
+  /* 전환 애니메이션은 넣지 않습니다 — 일부 환경(내장 브라우저·모션 최소화 설정)에서
+     transition 이 멈춰 메뉴가 아예 열리지 않는 문제가 있었습니다. 즉시 전환이 안전합니다. */
+  .navbackdrop{position:fixed;inset:0;background:rgba(16,33,46,.45);z-index:29;opacity:0;pointer-events:none}
   body.navopen .navbackdrop{opacity:1;pointer-events:auto}
   /* 사이드바 열림 상태 — body 클래스로 제어.
      navopen 은 모바일에서만(햄버거 버튼이 모바일에서만 보임) 설정됩니다. */
@@ -210,7 +212,7 @@
     #menuBtn{display:flex !important}
     /* 오프캔버스 메뉴 — left 대신 transform (모바일에서 더 부드럽고 안정적)
        ※ 열림 상태는 아래 body.navopen 규칙(미디어쿼리 밖)에서 처리합니다. */
-    .side{position:fixed;top:0;left:0;transform:translateX(-100%);transition:transform .22s ease;z-index:30}
+    .side{position:fixed;top:0;left:0;transform:translateX(-100%);z-index:30}
     .content{padding:18px}
     .topbar{padding:0 16px;gap:12px}
     .topbar .search{width:170px}

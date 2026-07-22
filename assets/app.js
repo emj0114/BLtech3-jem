@@ -781,8 +781,8 @@ function vClients(){
   const ocr=isNew?(state.clientOcr||null):null;
   const c=isNew?(state.clientOcr||{}):(clientFind(state.clientSel)||{});
   const autoSet=new Set((ocr&&ocr._fields)||[]);
-  const fld=(id,label,val,ph)=>{const auto=autoSet.has(id.slice(2));return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><label class="muted" style="width:104px;flex:0 0 104px;font-size:12.5px">${label}${auto?' <span class="badge ok" style="padding:0 5px;font-size:9.5px">인식</span>':''}</label><input id="${id}" value="${(val||'').replace(/"/g,'&quot;')}" ${ph?`placeholder="${ph}"`:''} style="flex:1;min-width:0;border:1px solid ${auto?'#9CD3B6':'var(--border-2)'};${auto?'background:var(--ok-soft);':''}border-radius:7px;padding:7px 10px;font-family:inherit;font-size:13px;box-sizing:border-box"></div>`;};
-  const sel=(id,label,val,opts)=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><label class="muted" style="width:104px;flex:0 0 104px;font-size:12.5px">${label}</label><select id="${id}" style="flex:1;border:1px solid var(--border-2);border-radius:7px;padding:7px 10px;font-family:inherit;font-size:13px">${opts.map(o=>`<option ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
+  const fld=(id,label,val,ph)=>{const auto=autoSet.has(id.slice(2));return `<div class="frow"><label class="muted">${label}${auto?' <span class="badge ok" style="padding:0 5px;font-size:9.5px">인식</span>':''}</label><input id="${id}" value="${(val||'').replace(/"/g,'&quot;')}" ${ph?`placeholder="${ph}"`:''} style="flex:1;min-width:0;border:1px solid ${auto?'#9CD3B6':'var(--border-2)'};${auto?'background:var(--ok-soft);':''}border-radius:7px;padding:7px 10px;font-family:inherit;font-size:13px;box-sizing:border-box"></div>`;};
+  const sel=(id,label,val,opts)=>`<div class="frow"><label class="muted">${label}</label><select id="${id}" style="flex:1;min-width:0;border:1px solid var(--border-2);border-radius:7px;padding:7px 10px;font-family:inherit;font-size:13px">${opts.map(o=>`<option ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
   return `
   <div class="pagehead"><div><div class="t">거래처 등록 · 수정 · 조회</div><div class="d">좌측에서 거래처를 찾아 선택하면 정보가 뜨고, 고친 뒤 저장하면 수정 이력이 남습니다. 신규 등록도 여기서 합니다.</div></div>
     <div class="quick"><button class="btn" onclick="clientNewForm()">+ 신규</button><button class="btn primary" onclick="clientSave()">저장</button></div>
@@ -1738,11 +1738,23 @@ document.getElementById('modal').addEventListener('click',e=>{
   if(e.target.id==='bulkSend'){ const n=state.checked.size; closeModal(); toast(n+'곳에 채권채무조회서를 발송했습니다'); }
 });
 document.getElementById('modalBg').addEventListener('click',e=>{ if(e.target.id==='modalBg') closeModal(); });
-// mobile menu
+// mobile menu — 배경 탭으로 닫기 + 메뉴 선택 시 자동 닫기
 const mq=window.matchMedia('(max-width:820px)');
-function syncMenu(){ document.getElementById('menuBtn').style.display=mq.matches?'flex':'none'; }
-mq.addEventListener('change',syncMenu); syncMenu();
-document.getElementById('menuBtn').addEventListener('click',()=>document.getElementById('side').classList.toggle('open'));
+// 버튼 노출은 CSS(#menuBtn)가 담당. 여기선 데스크톱으로 넓어질 때 열린 메뉴만 정리합니다.
+function syncMenu(){ if(!mq.matches) navOpen(false); }
+mq.addEventListener('change',syncMenu);
+const navBackdrop=document.createElement('div');
+navBackdrop.className='navbackdrop';
+document.body.appendChild(navBackdrop);
+function navOpen(on){
+  document.getElementById('side').classList.toggle('open', on);
+  document.body.classList.toggle('navopen', on);
+}
+document.getElementById('menuBtn').addEventListener('click',()=>navOpen(!document.getElementById('side').classList.contains('open')));
+navBackdrop.addEventListener('click',()=>navOpen(false));
+// 모바일에서 메뉴를 고르면 사이드바가 계속 덮고 있지 않도록 닫아줍니다
+document.getElementById('nav').addEventListener('click',e=>{ if(e.target.closest('a') && mq.matches) navOpen(false); });
+document.getElementById('brand').addEventListener('click',()=>{ if(mq.matches) navOpen(false); });
 
 /* 부팅 — 포털 기본 화면으로 시작.
    setTimeout(0) 으로 미뤄서, overseas.js 같은 포털 스크립트가 VIEWS 등록을 끝낸 뒤 실행되게 합니다. */

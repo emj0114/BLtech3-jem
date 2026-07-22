@@ -799,8 +799,8 @@ function vClients(){
     ${ocr._img?`<img src="${ocr._img}" style="width:58px;height:40px;object-fit:cover;border-radius:7px;border:1px solid var(--border)">`:'<span class="badge teal">PDF</span>'}
     <div style="flex:1"><b style="font-size:13px">사업자등록증에서 자동 인식했어요</b><div class="muted" style="font-size:12px">초록색 ‘인식’ 항목을 확인·수정한 뒤 <b>저장</b>하면 등록됩니다. 전화·팩스·메일·약칭·지역·등급은 직접 입력하세요.</div></div>
   </div></div>`:''}
-  <div class="row" style="align-items:flex-start;flex-wrap:nowrap;gap:14px">
-    <div class="card" style="flex:0 0 268px"><div class="pad" style="padding:12px">
+  <div class="row clientsplit" style="align-items:flex-start;gap:14px">
+    <div class="card clientlist"><div class="pad" style="padding:12px">
       <input class="search" style="width:100%;margin-bottom:8px" placeholder="거래처명·코드·대표자 검색…" oninput="clientListFilter(this.value)">
       <div id="clientList" style="max-height:560px;overflow:auto">${clientListHTML('')}</div>
     </div></div>

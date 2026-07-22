@@ -72,7 +72,8 @@
   .kpi .sub{font-size:12px;color:var(--ink-3);margin-top:3px}
   .kpi .val.warn{color:var(--warn)} .kpi .val.danger{color:var(--danger)} .kpi .val.ok{color:var(--ok)}
 
-  .btn{border:1px solid var(--border-2);background:var(--surface);color:var(--ink);border-radius:8px;padding:8px 13px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:7px}
+  /* 버튼 라벨은 줄바꿈 금지 — flex 안에서 눌리면 글자가 세로로 쪼개집니다 */
+  .btn{border:1px solid var(--border-2);background:var(--surface);color:var(--ink);border-radius:8px;padding:8px 13px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;flex-shrink:0}
   .btn:hover{background:var(--surface-2)}
   .btn.primary{background:var(--teal);border-color:var(--teal);color:#fff}
   .btn.primary:hover{background:var(--teal-d)}
@@ -179,6 +180,10 @@
   .searchdrop{position:absolute;top:calc(100% + 5px);left:0;right:0;z-index:25;background:var(--surface);border:1px solid var(--border-2);border-radius:9px;box-shadow:0 10px 30px rgba(16,33,46,.14);max-height:330px;overflow:auto;padding:5px}
   .searchdrop .opt{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:7px;cursor:pointer}
   .searchdrop .opt:hover{background:var(--surface-2)}
+  /* 거래처 등록 — 좌(목록) + 우(입력폼) 2단. 모바일에서는 세로로 쌓입니다. */
+  .clientsplit{flex-wrap:nowrap}
+  .clientsplit > .clientlist{flex:0 0 268px}
+
   /* 거래처 등록 좌측 목록 */
   .clrow{display:flex;align-items:center;gap:8px;padding:8px 9px;border-radius:7px;cursor:pointer;margin-bottom:2px}
   .clrow:hover{background:var(--surface-2)}
@@ -258,10 +263,20 @@
     .frow{flex-direction:column;align-items:stretch;gap:5px;margin-bottom:11px}
     .frow > label{width:auto;flex:none;font-size:12px}
 
-    /* 표 — 가로 스크롤 유지하되 답답하지 않게 */
+    /* 거래처 등록 — 좌우 2단을 세로로 (좁은 화면에서 오른쪽 폼이 짓눌려
+       글자가 한 자씩 세로로 쪼개지던 문제) */
+    .clientsplit{flex-wrap:wrap}
+    .clientsplit > .clientlist{flex:1 1 100%;width:100%}
+    .clientsplit > .clientlist .pad{max-height:270px;overflow-y:auto}
+
+    /* 표 — 칸을 억지로 줄이지 말고 가로 스크롤로 (한 글자씩 세로로 쪼개지는 것 방지) */
     table{font-size:12.5px}
     thead th{padding:9px 10px;font-size:11.5px}
     tbody td{padding:9px 10px}
+    .ov table{min-width:580px}
+    .badge{white-space:nowrap;font-size:11px;padding:3px 8px}
+    td .btn,td .btn.sm{white-space:nowrap}
+    tbody td>b{white-space:nowrap}
 
     .tabs{padding:0 4px}
     .tabs button{padding:11px 11px;font-size:13px}

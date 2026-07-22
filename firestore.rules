@@ -1,0 +1,44 @@
+rules_version = '2';
+
+/* =============================================================
+   Firestore 접근 규칙 — 실제 보안선입니다.
+   화면에서 메뉴를 숨기는 건 UI 편의일 뿐이고, 실제 차단은 여기서 합니다.
+
+   ★ 규정을 편집할 수 있는 사람을 늘리려면 admins() 목록에 이메일을 추가하고
+     firebase deploy --only firestore:rules 로 배포하세요.
+     (챗봇 사용 권한은 functions/index.js 의 ALLOWED_EMAILS 와 별개입니다)
+   ============================================================= */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function admins() {
+      return ['emj0114@gmail.com'];
+    }
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email.lower() in admins();
+    }
+
+    // 사내 규정 본문 — 로그인한 사람은 읽기, 관리자만 수정
+    match /settings/regulations {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin()
+                   && request.resource.data.content is string
+                   && request.resource.data.content.size() < 200000;   // 200KB 상한
+    }
+
+    // 수정 이력 — 관리자만 조회/기록. 한 번 남긴 이력은 고칠 수 없습니다.
+    match /regulationsHistory/{entry} {
+      allow read:   if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // 그 외 모든 경로는 차단 (Admin SDK 로 도는 Cloud Functions 는 규칙을 우회합니다)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

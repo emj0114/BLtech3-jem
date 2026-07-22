@@ -50,12 +50,25 @@ const SYSTEM_PROMPT = `당신은 비엘테크(주)의 사내 업무 도우미입
 
 공통: 한국어로 간결하게. 급여·징계 등 민감 사안은 반드시 담당 부서 확인을 함께 안내하세요.`;
 
-let rulesCache = null;
-function loadRegulations(){
-  if(rulesCache != null) return rulesCache;
-  try{ rulesCache = fs.readFileSync(path.join(__dirname, 'regulations.md'), 'utf8'); }
-  catch{ rulesCache = ''; }
-  return rulesCache;
+/* 사내 규정은 Firestore(settings/regulations)에서 읽습니다.
+   → 포털의 '규정 관리' 화면에서 저장하면 재배포 없이 즉시 반영됩니다.
+   Firestore 가 비어 있으면 배포에 포함된 기본 파일로 폴백합니다. */
+const db = admin.firestore();
+function loadRegulationsFile(){
+  try{ return fs.readFileSync(path.join(__dirname, 'regulations.md'), 'utf8'); }
+  catch{ return ''; }
+}
+async function loadRegulations(){
+  try{
+    const snap = await db.doc('settings/regulations').get();
+    if(snap.exists){
+      const c = (snap.data().content || '').trim();
+      if(c) return c;
+    }
+  }catch(err){
+    logger.warn('규정 로드 실패 — 기본 파일로 대체', err);
+  }
+  return loadRegulationsFile();
 }
 
 function toContent(m){
@@ -122,7 +135,7 @@ exports.chat = onRequest(
     if(bad) return res.status(400).json({ error:'BAD_FILE', message: bad });
     const hasFiles = msgs.some(m => Array.isArray(m.files) && m.files.length);
 
-    const rules = loadRegulations();
+    const rules = await loadRegulations();
     if(!rules.trim())
       return res.status(503).json({ error:'NO_RULES', message:'사내 규정 문서가 비어 있습니다.' });
 

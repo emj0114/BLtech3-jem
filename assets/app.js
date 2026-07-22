@@ -137,21 +137,22 @@ const ICONS={
   globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
   shield:'<path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/>',
   chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  book:'<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
 };
 // roles 가 있으면 그 역할만 메뉴가 보입니다(금액 민감 화면 등).
 const PORTALS={
   domestic:{ id:'domestic', name:'BL TECH', sub:'영업 포털 · 국내', home:'dom-dash',
-    roles:['관리자','국내영업','조회전용'], allow:['dom-','disc-','agency','doc','quote','lead','proposal','home','cert-hub'],
+    roles:['관리자','국내영업','조회전용'], allow:['dom-','disc-','agency','doc','quote','lead','proposal','home','cert-hub','rules-admin'],
     nav:[ {grp:'고객 발굴 센터'}, {v:'disc-dash',t:'발굴 동선 · 대시보드',icon:'search'}, {v:'disc-market',t:'시장분석 · STP',sub:1}, {v:'disc-leads',t:'잠재 거래처 리스트',sub:1},
           {grp:'국내영업'}, {v:'dom-dash',t:'대시보드',icon:'grid'}, {v:'dom-shipping',t:'출고 현황',sub:1}, {v:'dom-clients',t:'거래처 등록',sub:1},
           {v:'dom-agencies',t:'미수금 관리',sub:1,roles:['관리자','국내영업']}, {v:'dom-returns',t:'반품 · 교환 처리',sub:1},
           {v:'dom-pricing',t:'보험수가표 · 견적서',sub:1}, {v:'dom-contracts',t:'계약 관리',sub:1,roles:['관리자','국내영업']},
-          {grp:'공통'}, {v:'cert-hub',t:'인증·규제 허브',icon:'shield'} ] },
+          {grp:'공통'}, {v:'cert-hub',t:'인증·규제 허브',icon:'shield'}, {v:'rules-admin',t:'사내 규정 관리',icon:'book',roles:['관리자']} ] },
   overseas:{ id:'overseas', name:'BL TECH', sub:'영업 포털 · 해외', home:'ov-dash',
-    roles:['관리자','해외영업','조회전용'], allow:['ov-','cert-hub'],
+    roles:['관리자','해외영업','조회전용'], allow:['ov-','cert-hub','rules-admin'],
     nav:[ {grp:'해외영업'}, {v:'ov-dash',t:'대시보드',icon:'globe'}, {v:'ov-pricelist',t:'신규 고객',sub:1}, {v:'ov-orders',t:'수주 · 생산',sub:1},
           {v:'ov-agencies',t:'거래처 관리',sub:1}, {v:'ov-shipping',t:'선적 · 물류',sub:1}, {v:'ov-docs',t:'수출서류',sub:1},
-          {grp:'공통'}, {v:'cert-hub',t:'인증·규제 허브',icon:'shield'} ] },
+          {grp:'공통'}, {v:'cert-hub',t:'인증·규제 허브',icon:'shield'}, {v:'rules-admin',t:'사내 규정 관리',icon:'book',roles:['관리자']} ] },
 };
 const PORTAL = PORTALS[window.PORTAL_ID] || PORTALS.domestic;
 const OTHER  = PORTAL.id==='domestic' ? PORTALS.overseas : PORTALS.domestic;
@@ -1674,7 +1675,7 @@ function render(){
   const tb=document.getElementById('tabbar');
   if(tb){ tb.innerHTML=state.tabs.map(t=>`<div class="tab ${t.id===state.activeTab?'active':''} ${t.view===PORTAL.home?'home':''} ${navParent[t.view]?'':'pri'}" data-tabid="${t.id}"><span class="lb">${t.label}</span>${t.view===PORTAL.home?'':`<span class="x" data-closetab="${t.id}" title="닫기">×</span>`}</div>`).join(''); }
 }
-const TAB_LABELS={ home:'메인 화면','dom-dash':'대시보드','dom-agencies':'미수금 관리','dom-clients':'거래처 등록','dom-shipping':'출고 현황','dom-returns':'반품 · 교환 처리','dom-return-new':'반품 등록','dom-ledger':'원장 · 채권채무조회서 발송','dom-shipstatus':'출고현황 발송','dom-pricing':'보험수가표 · 견적서','dom-contracts':'계약 관리','dom-feedback':'피드백 요청서','dom-followup':'Follow-up','dom-pipeline':'파이프라인','quote':'견적서 작성','cert-hub':'인증·규제 허브',
+const TAB_LABELS={ home:'메인 화면','dom-dash':'대시보드','dom-agencies':'미수금 관리','dom-clients':'거래처 등록','dom-shipping':'출고 현황','dom-returns':'반품 · 교환 처리','dom-return-new':'반품 등록','dom-ledger':'원장 · 채권채무조회서 발송','dom-shipstatus':'출고현황 발송','dom-pricing':'보험수가표 · 견적서','dom-contracts':'계약 관리','dom-feedback':'피드백 요청서','dom-followup':'Follow-up','dom-pipeline':'파이프라인','quote':'견적서 작성','cert-hub':'인증·규제 허브','rules-admin':'사내 규정 관리',
   'ov-dash':'해외 현황','ov-pricelist':'신규 고객','ov-orders':'수주·생산','ov-agencies':'해외 거래처','ov-shipping':'선적·물류','ov-docs':'수출서류',
   'disc-dash':'발굴 동선','disc-leads':'잠재 거래처','disc-market':'시장분석','disc-search':'탐색','proposal':'제안서 작성' };
 function tabMeta(v){

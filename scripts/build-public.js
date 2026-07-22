@@ -19,6 +19,7 @@ const ALLOW = [
   'overseas.html',
   'assets/app.js',
   'assets/chatbot.js',
+  'assets/rules-admin.js',
   'assets/overseas.js',
   'assets/styles.css',
 ];

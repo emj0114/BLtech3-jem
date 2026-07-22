@@ -40,6 +40,7 @@ let botAuth = null;
     ]);
     const app = initializeApp(cfg);
     botAuth = { ...authMod, auth: authMod.getAuth(app) };
+    window.__fbApp = app;              // 규정 관리 화면(rules-admin.js)이 같은 앱·로그인을 재사용
     state.bot.auth.mode = 'required';
     botAuth.onAuthStateChanged(botAuth.auth, u=>{
       state.bot.auth.user = u ? { email:u.email, name:u.displayName, photo:u.photoURL } : null;
